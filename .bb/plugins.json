@@ -1,0 +1,13 @@
+{
+  "$schema": "https://getbb.app/schemas/plugins.schema.json",
+  "schemaVersion": 1,
+  "name": "bb-plugins",
+  "plugins": [
+    { "name": "bell", "source": "./plugins/bell" },
+    { "name": "mise", "source": "./plugins/mise" },
+    { "name": "pi", "source": "./plugins/pi" },
+    { "name": "usagi", "source": "./plugins/usagi" },
+    { "name": "voice-groq", "source": "./plugins/voice-groq" },
+    { "name": "bb-sidebar", "source": "./plugins/bb-sidebar" }
+  ]
+}
