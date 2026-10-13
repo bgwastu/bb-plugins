@@ -9,7 +9,6 @@ A collection of plugins for [BB](https://getbb.app).
 - `mise`
 - `pi`
 - `usagi` (connects to [bgwastu/usagi](https://github.com/bgwastu/usagi))
-- `voice-groq`
 
 ## Install
 
