@@ -28,13 +28,13 @@ import { cn } from "@/lib/utils";
 
 interface ServerFormState {
   name: string;
-  type: "http" | "sse" | "stdio";
+  type: "http" | "stdio" | "streamable-http";
   url: string;
   command: string;
   args: string;
   authHeader: string;
-  lifecycle: "lazy" | "eager";
-  directTools: boolean;
+  exposure: "direct" | "codemode" | "deferred" | "hidden";
+  description: string;
 }
 
 const DEFAULT_FORM: ServerFormState = {
@@ -44,15 +44,14 @@ const DEFAULT_FORM: ServerFormState = {
   command: "",
   args: "",
   authHeader: "",
-  lifecycle: "lazy",
-  directTools: false,
+  exposure: "direct",
+  description: "",
 };
 
 function formToServer(form: ServerFormState): McpServer {
   const server: McpServer = {
-    type: form.type,
-    lifecycle: form.lifecycle,
-    directTools: form.directTools ? true : undefined,
+    exposure: form.exposure,
+    description: form.description.trim() || undefined,
   };
 
   if (form.type === "stdio") {
@@ -62,6 +61,9 @@ function formToServer(form: ServerFormState): McpServer {
     }
   } else {
     server.url = form.url.trim();
+    if (form.type === "streamable-http") {
+      server.type = "streamable-http";
+    }
     if (form.authHeader.trim()) {
       const headerVal = form.authHeader.trim();
       server.headers = {
@@ -75,12 +77,13 @@ function formToServer(form: ServerFormState): McpServer {
 }
 
 function serverToForm(name: string, s: McpServer): ServerFormState {
-  const type = (s.type as "http" | "sse" | "stdio") || (s.url ? "http" : "stdio");
+  const type = (s.type as "http" | "stdio" | "streamable-http") || (s.url ? "http" : "stdio");
   const authHeader = s.headers?.Authorization || s.headers?.authorization || "";
   const command = Array.isArray(s.command) ? s.command[0] || "" : s.command || "";
   const args = Array.isArray(s.command) && s.command.length > 1
     ? s.command.slice(1).join(" ")
     : (s.args || []).join(" ");
+  const exposure = s.exposure || (s.directTools ? "direct" : "direct");
 
   return {
     name,
@@ -89,8 +92,8 @@ function serverToForm(name: string, s: McpServer): ServerFormState {
     command,
     args,
     authHeader,
-    lifecycle: s.lifecycle || "lazy",
-    directTools: !!s.directTools,
+    exposure,
+    description: s.description || "",
   };
 }
 
@@ -503,7 +506,7 @@ export function PiManagerPage() {
     });
   }, [serverEntries, searchQuery]);
 
-  const enabledCount = serverEntries.filter(([_, s]) => !s.disabled).length;
+  const enabledCount = serverEntries.filter(([_, s]) => !s.disabled && s.enabled !== false).length;
   const disabledCount = serverEntries.length - enabledCount;
 
   return (
@@ -723,11 +726,11 @@ export function PiManagerPage() {
                   ) : (
                     <div className="space-y-2.5">
                       {filteredEntries.map(([name, s]) => {
-                        const isDisabled = s.disabled === true;
+                        const isDisabled = s.enabled === false || s.disabled === true;
                         const testRes = testResults[name];
                         const isTesting = testing[name];
                         const typeLabel = s.type || (s.url ? "http" : "stdio");
-                        const lcLabel = s.lifecycle || "lazy";
+                        const exposureLabel = s.exposure || (s.directTools ? "direct" : undefined);
                         const targetStr =
                           s.url ||
                           (Array.isArray(s.command) ? s.command.join(" ") : s.command) ||
@@ -786,17 +789,10 @@ export function PiManagerPage() {
                                     {typeLabel}
                                   </span>
 
-                                  {/* Lifecycle Badge */}
-                                  {lcLabel !== "lazy" && (
-                                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                                      {lcLabel}
-                                    </span>
-                                  )}
-
-                                  {/* Direct Tools Badge */}
-                                  {s.directTools && (
+                                  {/* Exposure Badge */}
+                                  {exposureLabel && (
                                     <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                      direct-tools
+                                      {exposureLabel}
                                     </span>
                                   )}
                                 </div>
@@ -1241,37 +1237,35 @@ export function PiManagerPage() {
                   </>
                 )}
 
-                {/* Lifecycle & Options */}
-                <div className="pt-1 flex flex-wrap items-center justify-between gap-3 border-t border-border/50">
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={addForm.lifecycle === "eager"}
+                {/* Exposure & Description */}
+                <div className="pt-2 flex flex-col gap-2.5 border-t border-border/50">
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-muted-foreground w-20 shrink-0">Exposure</label>
+                    <select
+                      value={addForm.exposure}
                       onChange={(e) =>
                         setAddForm((prev) => ({
                           ...prev,
-                          lifecycle: e.target.checked ? "eager" : "lazy",
+                          exposure: e.target.value as any,
                         }))
                       }
-                      className="rounded border-border text-primary"
+                      className="h-8 rounded-md border border-input bg-background px-2 text-xs font-mono"
+                    >
+                      <option value="direct">direct (declared to model)</option>
+                      <option value="codemode">codemode (scripting only)</option>
+                      <option value="deferred">deferred (tool_search)</option>
+                      <option value="hidden">hidden (unreachable)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">Description (optional)</label>
+                    <Input
+                      value={addForm.description}
+                      onChange={(e) => setAddForm((prev) => ({ ...prev, description: e.target.value }))}
+                      placeholder="What this server provides"
+                      className="text-xs h-8"
                     />
-                    <span>Eager connect on launch</span>
-                  </label>
-
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={addForm.directTools}
-                      onChange={(e) =>
-                        setAddForm((prev) => ({
-                          ...prev,
-                          directTools: e.target.checked,
-                        }))
-                      }
-                      className="rounded border-border text-primary"
-                    />
-                    <span>Direct tools mode</span>
-                  </label>
+                  </div>
                 </div>
               </>
             ) : (
@@ -1497,37 +1491,35 @@ export function PiManagerPage() {
                   </>
                 )}
 
-                {/* Lifecycle & Options */}
-                <div className="pt-1 flex flex-wrap items-center justify-between gap-3 border-t border-border/50">
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={editForm.lifecycle === "eager"}
+                {/* Exposure & Description */}
+                <div className="pt-2 flex flex-col gap-2.5 border-t border-border/50">
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-muted-foreground w-20 shrink-0">Exposure</label>
+                    <select
+                      value={editForm.exposure}
                       onChange={(e) =>
                         setEditForm((prev) => ({
                           ...prev,
-                          lifecycle: e.target.checked ? "eager" : "lazy",
+                          exposure: e.target.value as any,
                         }))
                       }
-                      className="rounded border-border text-primary"
+                      className="h-8 rounded-md border border-input bg-background px-2 text-xs font-mono"
+                    >
+                      <option value="direct">direct (declared to model)</option>
+                      <option value="codemode">codemode (scripting only)</option>
+                      <option value="deferred">deferred (tool_search)</option>
+                      <option value="hidden">hidden (unreachable)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">Description (optional)</label>
+                    <Input
+                      value={editForm.description}
+                      onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
+                      placeholder="What this server provides"
+                      className="text-xs h-8"
                     />
-                    <span>Eager connect on launch</span>
-                  </label>
-
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={editForm.directTools}
-                      onChange={(e) =>
-                        setEditForm((prev) => ({
-                          ...prev,
-                          directTools: e.target.checked,
-                        }))
-                      }
-                      className="rounded border-border text-primary"
-                    />
-                    <span>Direct tools mode</span>
-                  </label>
+                  </div>
                 </div>
               </>
             ) : (

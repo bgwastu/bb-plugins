@@ -29,13 +29,13 @@ bb pi config set defaultThinkingLevel "low"
 bb pi mcp list
 bb pi mcp list --json
 bb pi mcp get windmill
-bb pi mcp set my-server --url "https://api.example.com/mcp" --type http --lifecycle lazy
+bb pi mcp set my-server --url "https://api.example.com/mcp" --exposure direct
 bb pi mcp test windmill
 bb pi mcp remove my-server
 
 # Package management
 bb pi package list
-bb pi package add "npm:pi-mcp-adapter"
+bb pi package add "npm:@juicesharp/rpiv-todo"
 bb pi package remove "npm:old-package"
 ```
 

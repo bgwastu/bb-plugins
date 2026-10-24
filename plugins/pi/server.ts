@@ -330,8 +330,10 @@ export default async function plugin(bb: BbPluginApi) {
       const current = await readMcpConfig();
       if (current.mcpServers && current.mcpServers[name]) {
         if (disabled) {
-          current.mcpServers[name].disabled = true;
+          current.mcpServers[name].enabled = false;
+          delete current.mcpServers[name].disabled;
         } else {
+          delete current.mcpServers[name].enabled;
           delete current.mcpServers[name].disabled;
         }
         await writeMcpConfig(current);
@@ -592,10 +594,13 @@ export default async function plugin(bb: BbPluginApi) {
           if (!name) return { exitCode: 1, stderr: `Usage: bb pi mcp ${action} <name>` };
           const s = servers[name];
           if (!s) return { exitCode: 1, stderr: `MCP server "${name}" not found.` };
-          const willDisable = action === "disable" ? true : action === "enable" ? false : !s.disabled;
+          const currentlyDisabled = s.enabled === false || s.disabled === true;
+          const willDisable = action === "disable" ? true : action === "enable" ? false : !currentlyDisabled;
           if (willDisable) {
-            s.disabled = true;
+            s.enabled = false;
+            delete s.disabled;
           } else {
+            delete s.enabled;
             delete s.disabled;
           }
           await writeMcpConfig(mcpConfig);
@@ -618,7 +623,8 @@ export default async function plugin(bb: BbPluginApi) {
           if (!name) return { exitCode: 1, stderr: "Usage: bb pi mcp set <name> --url <url> ..." };
           let url: string | undefined;
           let type: string | undefined;
-          let lifecycle: "eager" | "lazy" | undefined;
+          let exposure: "direct" | "codemode" | "deferred" | "hidden" | undefined;
+          let description: string | undefined;
           let disabled: boolean | undefined;
           const headers: Record<string, string> = {};
 
@@ -627,9 +633,11 @@ export default async function plugin(bb: BbPluginApi) {
               url = argv[++i];
             } else if (argv[i] === "--type" && argv[i + 1]) {
               type = argv[++i];
-            } else if (argv[i] === "--lifecycle" && argv[i + 1]) {
+            } else if (argv[i] === "--exposure" && argv[i + 1]) {
               const val = argv[++i];
-              if (val === "eager" || val === "lazy") lifecycle = val;
+              if (["direct", "codemode", "deferred", "hidden"].includes(val)) exposure = val as any;
+            } else if (argv[i] === "--description" && argv[i + 1]) {
+              description = argv[++i];
             } else if (argv[i] === "--disabled") {
               disabled = true;
             } else if (argv[i] === "--enabled") {
@@ -648,11 +656,13 @@ export default async function plugin(bb: BbPluginApi) {
             ...existing,
             ...(url ? { url } : {}),
             ...(type ? { type } : {}),
-            ...(lifecycle ? { lifecycle } : {}),
-            ...(disabled !== undefined ? (disabled ? { disabled: true } : {}) : {}),
+            ...(exposure ? { exposure } : {}),
+            ...(description ? { description } : {}),
+            ...(disabled !== undefined ? (disabled ? { enabled: false } : {}) : {}),
             ...(Object.keys(headers).length > 0 ? { headers: { ...(existing.headers || {}), ...headers } } : {}),
           };
           if (disabled === false) {
+            delete updated.enabled;
             delete updated.disabled;
           }
 

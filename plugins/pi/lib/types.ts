@@ -26,14 +26,19 @@ export const mcpServerSchema = z.object({
   type: z.string().optional(),
   httpTransport: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
-  lifecycle: z.enum(["eager", "lazy"]).optional(),
-  directTools: z.boolean().optional(),
-  toolPrefix: z.string().optional(),
+  exposure: z.enum(["direct", "codemode", "deferred", "hidden"]).optional(),
+  toolExposure: z.record(z.string(), z.enum(["direct", "codemode", "deferred", "hidden"])).optional(),
+  description: z.string().optional(),
+  timeout: z.number().optional(),
   command: z.union([z.string(), z.array(z.string())]).optional(),
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean().optional(),
-  oauth: z.boolean().optional(),
+  oauth: z.union([z.boolean(), z.record(z.string(), z.any())]).optional(),
+  // Legacy adapter fields preserved for compatibility
+  lifecycle: z.enum(["eager", "lazy"]).optional(),
+  directTools: z.boolean().optional(),
+  toolPrefix: z.string().optional(),
   disabled: z.boolean().optional(),
 }).passthrough();
 

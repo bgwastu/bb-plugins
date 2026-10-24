@@ -63,11 +63,6 @@ export async function readMcpConfig(): Promise<McpConfig> {
   const filePath = getMcpPath();
   if (!fs.existsSync(filePath)) {
     return {
-      settings: {
-        toolPrefix: "none",
-        mcpFooterStatus: "off",
-        notifyOnStartupConnect: false,
-      },
       mcpServers: {},
     };
   }
