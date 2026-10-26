@@ -1,21 +1,27 @@
 import React, { useState } from "react";
-import type { UsagiAccountItem, UsagiMeter } from "../lib/types";
-import { PROVIDER_META } from "../lib/types";
+import type {
+  UsagiAccountItem,
+  UsagiBoardData,
+  UsagiMeter,
+  UsagiProviderIcons,
+} from "../lib/types";
+import { providerLabel } from "../lib/types";
 import { ProviderIcon } from "./provider-icons";
 import { MeterBar } from "./meter-bar";
 import { Icon } from "./ui/icon";
 
 type AccountTileProps = {
   item: UsagiAccountItem;
+  /** Provider catalog from the API; falls back to the built-in names. */
+  providers?: UsagiBoardData["providers"];
+  /** SVG markup per provider id, fetched from the API's `iconPath`. */
+  icons?: UsagiProviderIcons;
   compact?: boolean;
 };
 
-export function AccountTile({ item, compact = false }: AccountTileProps) {
+export function AccountTile({ item, providers, icons, compact = false }: AccountTileProps) {
   const { account, usage } = item;
-  const meta = PROVIDER_META[account.provider] ?? {
-    displayName: account.provider.charAt(0).toUpperCase() + account.provider.slice(1),
-    description: "",
-  };
+  const label = providerLabel(providers, account.provider);
 
   const [expandedDetails, setExpandedDetails] = useState(false);
 
@@ -30,12 +36,16 @@ export function AccountTile({ item, compact = false }: AccountTileProps) {
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex size-6.5 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/40 text-foreground transition-colors group-hover:bg-muted">
-              <ProviderIcon provider={account.provider} size={15} />
+              <ProviderIcon
+                provider={account.provider}
+                size={15}
+                svg={icons?.[account.provider]}
+              />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
                 <span className="truncate text-xs font-semibold tracking-tight text-foreground">
-                  {meta.displayName}
+                  {label}
                 </span>
                 {usage?.plan ? (
                   <span className="inline-flex shrink-0 items-center rounded border border-border/80 bg-muted/60 px-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">

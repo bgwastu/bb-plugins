@@ -1,6 +1,10 @@
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { boardDataSchema, type UsagiBoardData } from "./lib/types";
+import {
+  boardDataSchema,
+  type UsagiBoardData,
+  type UsagiProviderIcons,
+} from "./lib/types";
 import { formatResetCountdown, remainingPercent, clampPercent } from "./lib/format";
 
 const DEFAULT_ENDPOINT = "";
@@ -12,6 +16,7 @@ export const rpcContract = defineRpcContract({
     output: z.object({
       ok: z.boolean(),
       data: boardDataSchema.nullable(),
+      icons: z.record(z.string(), z.string()).optional(),
       error: z.string().optional(),
     }),
   },
@@ -20,6 +25,7 @@ export const rpcContract = defineRpcContract({
     output: z.object({
       ok: z.boolean(),
       data: boardDataSchema.nullable(),
+      icons: z.record(z.string(), z.string()).optional(),
       error: z.string().optional(),
     }),
   },
@@ -60,6 +66,58 @@ export default async function plugin(bb: BbPluginApi) {
   let cachedBoard: UsagiBoardData | null =
     (await bb.storage.kv.get<UsagiBoardData>("usagi_board")) ?? null;
 
+  /** provider id -> SVG markup, and the `iconPath` that markup came from. */
+  let cachedIcons: UsagiProviderIcons = {};
+  const cachedIconPaths: Record<string, string> = {};
+
+  /**
+   * Pull every provider's mark from the `iconPath` the API publishes.
+   *
+   * The marks are `currentColor` SVGs, so the UI inlines them rather than
+   * pointing an <img> at them (an <img> cannot inherit the theme colour and
+   * would paint a black icon on a dark tile). Best-effort throughout: a
+   * provider that fails keeps its built-in fallback.
+   */
+  async function fetchIcons(
+    board: UsagiBoardData,
+    baseUrl: string,
+    headers: Record<string, string>,
+  ): Promise<void> {
+    const providers = board.providers;
+    if (!providers) return;
+
+    let base: URL;
+    try {
+      base = new URL(baseUrl);
+    } catch {
+      return;
+    }
+
+    await Promise.all(
+      Object.entries(providers).map(async ([id, meta]) => {
+        if (cachedIcons[id] && cachedIconPaths[id] === meta.iconPath) return;
+
+        const iconUrl = new URL(meta.iconPath, base);
+        // Never hand the Usagi password to a host it does not belong to.
+        if (iconUrl.origin !== base.origin) return;
+
+        try {
+          const res = await fetch(iconUrl, {
+            headers: { ...headers, Accept: "image/svg+xml" },
+          });
+          if (!res.ok) return;
+          const svg = await res.text();
+          // A login page or an error body is not an icon.
+          if (!svg.includes("<svg")) return;
+          cachedIcons = { ...cachedIcons, [id]: svg };
+          cachedIconPaths[id] = meta.iconPath;
+        } catch {
+          // Keep the built-in fallback.
+        }
+      }),
+    );
+  }
+
   async function fetchBoard(force = false): Promise<UsagiBoardData> {
     const config = await settings.get();
     const endpointVal = typeof config.endpoint === "string" ? config.endpoint.trim() : "";
@@ -95,6 +153,7 @@ export default async function plugin(bb: BbPluginApi) {
     const parsed = boardDataSchema.parse(rawJson);
     cachedBoard = parsed;
     await bb.storage.kv.set("usagi_board", parsed);
+    await fetchIcons(parsed, urlStr, headers);
 
     bb.realtime.publish(USAGI_UPDATED_CHANNEL, {
       count: parsed.accounts.length,
@@ -110,23 +169,23 @@ export default async function plugin(bb: BbPluginApi) {
       try {
         if (!cachedBoard || force) {
           const fresh = await fetchBoard(Boolean(force));
-          return { ok: true, data: fresh };
+          return { ok: true, data: fresh, icons: cachedIcons };
         }
-        return { ok: true, data: cachedBoard };
+        return { ok: true, data: cachedBoard, icons: cachedIcons };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         bb.log.warn(`Failed to get Usagi usage: ${message}`);
-        return { ok: false, data: cachedBoard, error: message };
+        return { ok: false, data: cachedBoard, icons: cachedIcons, error: message };
       }
     },
     usagi_refresh: async () => {
       try {
         const fresh = await fetchBoard(true);
-        return { ok: true, data: fresh };
+        return { ok: true, data: fresh, icons: cachedIcons };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         bb.log.warn(`Failed to refresh Usagi usage: ${message}`);
-        return { ok: false, data: cachedBoard, error: message };
+        return { ok: false, data: cachedBoard, icons: cachedIcons, error: message };
       }
     },
   });

@@ -48,12 +48,39 @@ export const accountItemSchema = z.object({
 
 export type UsagiAccountItem = z.infer<typeof accountItemSchema>;
 
+/**
+ * Provider presentation data published by the Usagi API (`GET /api` →
+ * `providers`, plus `GET /api/providers`). Optional so a board cached by an
+ * older build — or an older server — still parses.
+ */
+export const providerMetaSchema = z.object({
+  name: z.string(),
+  iconPath: z.string(),
+});
+
+export type UsagiProviderMeta = z.infer<typeof providerMetaSchema>;
+
 export const boardDataSchema = z.object({
   generatedAt: z.number(),
+  providers: z.record(z.string(), providerMetaSchema).optional(),
   accounts: z.array(accountItemSchema),
 });
 
 export type UsagiBoardData = z.infer<typeof boardDataSchema>;
+
+/** SVG markup per provider id, fetched from the API's `iconPath` and inlined. */
+export type UsagiProviderIcons = Record<string, string>;
+
+/**
+ * The label for a provider: prefer the API's name, fall back to the built-in
+ * table, then to the raw id.
+ */
+export function providerLabel(
+  providers: UsagiBoardData["providers"] | undefined,
+  provider: string,
+): string {
+  return providers?.[provider]?.name ?? PROVIDER_META[provider]?.displayName ?? provider;
+}
 
 export type ProviderId =
   | "codex"
@@ -77,6 +104,10 @@ export const PROVIDER_META: Record<
   codex: {
     displayName: "Codex",
     description: "OpenAI Codex OAuth session",
+  },
+  claude: {
+    displayName: "Claude",
+    description: "Claude Code session & weekly windows",
   },
   antigravity: {
     displayName: "Antigravity",

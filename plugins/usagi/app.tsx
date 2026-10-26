@@ -8,7 +8,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
 import type { UsagiBoardData } from "./lib/types";
-import { PROVIDER_META } from "./lib/types";
+import { providerLabel, type UsagiProviderIcons } from "./lib/types";
 import { AccountTile } from "./components/account-tile";
 import { ProviderIcon, RabbitIcon } from "./components/provider-icons";
 import { MeterBar } from "./components/meter-bar";
@@ -24,6 +24,7 @@ function useUsagiBoard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [icons, setIcons] = useState<UsagiProviderIcons>({});
 
   const fetchUsage = useCallback(
     async (force = false) => {
@@ -32,6 +33,7 @@ function useUsagiBoard() {
         const res = await rpc.call("usagi_get_usage", { force });
         if (res.ok && res.data) {
           setBoard(res.data);
+          if (res.icons) setIcons(res.icons);
           setError(null);
         } else if (res.error) {
           setError(res.error);
@@ -54,7 +56,14 @@ function useUsagiBoard() {
     fetchUsage(false);
   });
 
-  return { board, loading, refreshing, error, refetch: () => fetchUsage(true) };
+  return {
+    board,
+    icons,
+    loading,
+    refreshing,
+    error,
+    refetch: () => fetchUsage(true),
+  };
 }
 
 /** Header Actions rendered directly in BB's native top title bar */
@@ -114,7 +123,7 @@ function UsagiHeaderActions() {
 
 /** Dashboard Page for Nav Panel (no duplicate headers) */
 function UsagiDashboardPage() {
-  const { board, loading, refreshing, error, refetch } = useUsagiBoard();
+  const { board, icons, loading, refreshing, error, refetch } = useUsagiBoard();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedProvider, setSelectedProvider] = useState<string>("all");
 
@@ -139,11 +148,10 @@ function UsagiDashboardPage() {
       }
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
-      const meta = PROVIDER_META[p];
       return (
         item.account.name.toLowerCase().includes(q) ||
         p.toLowerCase().includes(q) ||
-        (meta && meta.displayName.toLowerCase().includes(q))
+        providerLabel(board?.providers, p).toLowerCase().includes(q)
       );
     });
   }, [accounts, selectedProvider, searchQuery]);
@@ -173,7 +181,6 @@ function UsagiDashboardPage() {
               All ({accounts.length})
             </button>
             {Array.from(providerCounts.entries()).map(([prov, count]) => {
-              const meta = PROVIDER_META[prov];
               const isSelected = selectedProvider === prov;
               return (
                 <button
@@ -186,8 +193,8 @@ function UsagiDashboardPage() {
                       : "bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground"
                   }`}
                 >
-                  <ProviderIcon provider={prov} size={12} />
-                  <span>{meta?.displayName ?? prov}</span>
+                  <ProviderIcon provider={prov} size={12} svg={icons[prov]} />
+                  <span>{providerLabel(board?.providers, prov)}</span>
                   <span className="font-mono text-[10px] opacity-70">({count})</span>
                 </button>
               );
@@ -242,7 +249,12 @@ function UsagiDashboardPage() {
         ) : (
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
             {filteredAccounts.map((item) => (
-              <AccountTile key={item.account.id} item={item} />
+              <AccountTile
+                key={item.account.id}
+                item={item}
+                providers={board?.providers}
+                icons={icons}
+              />
             ))}
           </div>
         )}
@@ -254,7 +266,7 @@ function UsagiDashboardPage() {
 
 /** Homepage Section */
 function UsagiHomepageSection() {
-  const { board, loading } = useUsagiBoard();
+  const { board, icons, loading } = useUsagiBoard();
   const { values: settingsValues } = useSettings();
   const navigate = useBbNavigate();
   const accounts = board?.accounts ?? [];
@@ -304,9 +316,13 @@ function UsagiHomepageSection() {
             >
               <div className="mb-1 flex items-center justify-between gap-1">
                 <div className="flex min-w-0 items-center gap-1.5">
-                  <ProviderIcon provider={acc.provider} size={13} />
+                  <ProviderIcon
+                    provider={acc.provider}
+                    size={13}
+                    svg={icons[acc.provider]}
+                  />
                   <span className="truncate text-[11px] font-medium text-foreground">
-                    {PROVIDER_META[acc.provider]?.displayName ?? acc.provider}
+                    {providerLabel(board?.providers, acc.provider)}
                   </span>
                 </div>
                 {u?.plan ? (
@@ -331,7 +347,7 @@ function UsagiHomepageSection() {
 
 /** Thread Right Panel View */
 function UsagiThreadPanel() {
-  const { board, loading, refreshing, refetch } = useUsagiBoard();
+  const { board, icons, loading, refreshing, refetch } = useUsagiBoard();
   const [filter, setFilter] = useState("");
   const accounts = board?.accounts ?? [];
 
@@ -380,7 +396,13 @@ function UsagiThreadPanel() {
 
       <div className="space-y-2 overflow-y-auto">
         {filtered.map((item) => (
-          <AccountTile key={item.account.id} item={item} compact />
+          <AccountTile
+            key={item.account.id}
+            item={item}
+            providers={board?.providers}
+            icons={icons}
+            compact
+          />
         ))}
       </div>
     </div>
