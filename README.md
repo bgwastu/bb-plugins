@@ -8,6 +8,7 @@ A collection of plugins for [BB](https://getbb.app).
 - `bell`
 - `mise`
 - `pi`
+- `plain-copy` (copying selected timeline text yields plain text instead of Markdown)
 - `usagi` (connects to [bgwastu/usagi](https://github.com/bgwastu/usagi))
 
 ## Install
