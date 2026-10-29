@@ -3,6 +3,7 @@
   "schemaVersion": 1,
   "name": "bb-plugins",
   "plugins": [
+    { "name": "plain-copy", "source": "./plugins/plain-copy" },
     { "name": "bell", "source": "./plugins/bell" },
     { "name": "mise", "source": "./plugins/mise" },
     { "name": "pi", "source": "./plugins/pi" },
