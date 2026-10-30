@@ -1,0 +1,4 @@
+# False positives: published RFC test vectors, not credentials.
+
+# RFC 8291 section 5 auth secret, quoted for the aes128gcm encryption test.
+plugins/web-push/scripts/test-crypto.ts:generic-api-key:20

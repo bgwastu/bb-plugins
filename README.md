@@ -10,6 +10,7 @@ A collection of plugins for [BB](https://getbb.app).
 - `pi`
 - `plain-copy` (copying selected timeline text yields plain text instead of Markdown)
 - `usagi` (connects to [bgwastu/usagi](https://github.com/bgwastu/usagi))
+- `web-push` (real Web Push notifications for browsers and phones, with the tab closed)
 
 ## Install
 
