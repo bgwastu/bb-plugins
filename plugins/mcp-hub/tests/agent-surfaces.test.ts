@@ -253,12 +253,6 @@ describe("agent surfaces", () => {
     const active = await load();
     await addEcho(active);
     await active.harness.behavior.callRpc("catalog_sync", { serverId: "echo" });
-    // This is about the pipe reaching the server, not about consent: the
-    // fixture declares no readOnlyHint, so it defaults to asking and would
-    // block here forever. The gate itself is covered in consent.test.ts.
-    await active.harness.behavior.callRpc("tool_set_ask", {
-      serverId: "echo", upstreamName: "echo", ask: false,
-    });
     const result = await active.harness.behavior.callAgentTool("echo", { text: "hi" });
     expect(JSON.stringify(result)).toContain("hi");
   });

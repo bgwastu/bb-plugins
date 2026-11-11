@@ -15,8 +15,7 @@ function tool(overrides: Partial<CatalogTool> = {}): CatalogTool {
   return {
     serverId: "executor", upstreamName: "execute", registeredName: "execute",
     description: "Run code.\n\n## Available integrations\n- `notion_com`\n- `slack_com`\n",
-    inputSchema: {}, readOnly: false, ask: true, askOverridden: false,
-    defaultEnabled: true, stale: false, syncedAt: 1, ...overrides,
+    inputSchema: {}, readOnly: false, defaultEnabled: true, stale: false, syncedAt: 1, ...overrides,
   };
 }
 

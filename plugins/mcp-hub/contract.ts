@@ -158,13 +158,6 @@ export const serverSchema = z.object({
    * be told apart from a field the server forgot to fill in.
    */
   authStatus: authStatusSchema.nullable(),
-  /**
-   * Every tool from this server prompts, whatever its `readOnlyHint` says and
-   * whatever the user clicks (design section 12.1). Reported so the panel can
-   * explain why those switches are not offered rather than leaving the user to
-   * wonder why the prompts never stop.
-   */
-  alwaysAsk: z.boolean(),
   /** An OAuth client the user created themselves, `null` when none is saved. */
   oauthClientId: z.string().nullable(),
   /**
@@ -208,7 +201,6 @@ export const toolSchema = z.object({
   registeredName: z.string(),
   description: z.string(),
   readOnly: z.boolean(),
-  ask: z.boolean(),
   /**
    * Available in every project that has not overridden it off, so the panel
    * can show a tool as reachable in a project whose checkbox nobody ticked.
@@ -464,12 +456,6 @@ export const rpcContract = defineRpcContract({
     input: z.object({ registeredName: z.string() }),
     output: z.object({ tool: toolDetailsSchema }),
   },
-  tool_set_ask: {
-    input: z.object({
-      serverId: z.string(), upstreamName: z.string(), ask: z.boolean(),
-    }),
-    output: okSchema,
-  },
   /**
    * One project's overrides, on ones and off ones alike.
    *
@@ -518,36 +504,3 @@ export const rpcContract = defineRpcContract({
   },
 });
 export type McpRpcContract = typeof rpcContract;
-
-/**
- * The renderer the consent prompt is drawn with.
- *
- * BB puts every plugin tool into Claude Code's `allowedTools` and Codex
- * forwards tool calls with no approval hook, so no provider asks on this
- * plugin's behalf: this prompt is the ONLY thing between a model and a write
- * to the user's Gmail or Slack (design section 9).
- */
-export const CONSENT_RENDERER_ID = "mcp-consent";
-
-/**
- * What the prompt shows. `summary` is a truncated `JSON.stringify` of the
- * arguments rather than the arguments themselves: `requestInput` rejects a
- * payload over 64 KiB outright, and a rejected payload denies a call the user
- * never got to see.
- */
-export const consentPayloadSchema = z.object({
-  serverName: z.string(),
-  toolName: z.string(),
-  summary: z.string(),
-  destructive: z.boolean(),
-});
-export type McpConsentPayload = z.infer<typeof consentPayloadSchema>;
-
-/**
- * What the user answered. "thread" is remembered for this tool in this thread
- * until the thread ends; "once" covers only the call that asked.
- */
-export const consentResponseSchema = z.object({
-  decision: z.enum(["once", "thread", "deny"]),
-});
-export type McpConsentResponse = z.infer<typeof consentResponseSchema>;

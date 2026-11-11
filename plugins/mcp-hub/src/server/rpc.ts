@@ -9,7 +9,7 @@ import {
   rpcContract,
   transportForKind,
 } from "../../contract.js";
-import { alwaysAsks, type Catalog } from "../catalog.js";
+import type { Catalog } from "../catalog.js";
 import { warnQuietly } from "./log.js";
 import { describeParameters } from "./tool-details.js";
 import { driftedToolNames } from "./tools.js";
@@ -49,7 +49,6 @@ function toServerDto(
     enabled: record.enabled,
     createdAt: record.createdAt,
     authStatus,
-    alwaysAsk: alwaysAsks(record),
     oauthClientId: record.oauthClientId,
     // Whether one is stored, never the secret itself: this DTO is the payload
     // of every panel render, and a secret in it is a secret in every network
@@ -93,7 +92,6 @@ function toToolDto(row: CatalogTool, drifted: ReadonlySet<string>): McpToolDto {
     registeredName: row.registeredName,
     description: row.description,
     readOnly: row.readOnly,
-    ask: row.ask,
     defaultEnabled: row.defaultEnabled,
     stale: row.stale,
     driftedFromRegistration: drifted.has(row.registeredName),
@@ -420,31 +418,6 @@ export function registerRpc(bb: BbPluginApi, deps: RpcDeps): void {
           inputSchema: JSON.stringify(row.inputSchema, null, 2),
         },
       };
-    },
-
-    tool_set_ask: (input) => {
-      const server = requireServer(input.serverId);
-      const tool = deps.registry
-        .listTools(input.serverId)
-        .find((row) => row.upstreamName === input.upstreamName);
-      if (tool === undefined) {
-        throw new Error(
-          `Server "${input.serverId}" has no tool named "${input.upstreamName}"`,
-        );
-      }
-      if (!input.ask && alwaysAsks(server)) {
-        // The named mitigation for the design's first risk. Accepting the write
-        // and letting the next sync undo it would be worse than refusing: the
-        // panel would show the switch off while the gate stayed armed.
-        throw new Error(
-          `Tools from "${server.displayName}" always ask before they run: reading `
-          + "an attacker-authored message from a Google Workspace account is itself "
-          + "the attack this prompt exists for.",
-        );
-      }
-      deps.registry.setToolAsk(input.serverId, input.upstreamName, input.ask);
-      changed();
-      return { ok: true };
     },
 
     bindings_list: (input) => ({

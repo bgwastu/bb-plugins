@@ -57,7 +57,7 @@ function row(overrides: Partial<CatalogTool> = {}): CatalogTool {
   return {
     serverId: "echo", upstreamName: "echo", registeredName: "echo",
     description: "Echo text", inputSchema: { type: "object" },
-    readOnly: false, ask: true, askOverridden: false, defaultEnabled: false,
+    readOnly: false, defaultEnabled: false,
     stale: false, syncedAt: 1,
     ...overrides,
   };
@@ -129,7 +129,7 @@ describe("catalog tool registration", () => {
 
   it("re-reads the row on every call instead of closing over it", async () => {
     const store = registry();
-    store.replaceCatalog("echo", [row({ ask: true })]);
+    store.replaceCatalog("echo", [row()]);
     const { bb, registered } = fakeBb();
     const seen: CatalogTool[] = [];
     registerCatalogTools(bb, {
@@ -140,11 +140,11 @@ describe("catalog tool registration", () => {
       },
     });
 
-    // A tool cannot be re-registered, so a later `ask` change is only visible
+    // A tool cannot be re-registered, so a later catalog change is only visible
     // if execute reads the row at call time.
-    store.setToolAsk("echo", "echo", false);
+    store.replaceCatalog("echo", [row({ description: "changed" })]);
     await registered[0].execute({}, ctx);
-    expect(seen[0].ask).toBe(false);
+    expect(seen[0].description).toBe("changed");
   });
 
   it("reports a vanished server instead of failing the turn", async () => {

@@ -94,7 +94,7 @@ describe("rpc", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
       serverId: "echo", upstreamName: "echo", registeredName: "echo",
-      ask: true, readOnly: false, stale: false,
+      readOnly: false, stale: false,
     });
     expect(tools[0].schemaBytes).toBeGreaterThan(0);
     expect(tools[0].estimatedTokens).toBeGreaterThan(0);
@@ -130,17 +130,6 @@ describe("rpc", () => {
     const active = await load();
     await expect(call(active, "tool_details", { registeredName: "nope" }))
       .rejects.toThrow(/nope/);
-  });
-
-  it("flips a tool's ask flag", async () => {
-    const active = await load();
-    await addEcho(active);
-    await call(active, "catalog_sync", { serverId: "echo" });
-    await call(active, "tool_set_ask", {
-      serverId: "echo", upstreamName: "echo", ask: false,
-    });
-    const { tools } = await call(active, "tools_list", { serverId: "echo" });
-    expect(tools[0].ask).toBe(false);
   });
 
   it("counts only the tools it knows when setting defaults", async () => {
@@ -459,8 +448,8 @@ describe("rpc servers_set_headers", () => {
 });
 
 /**
- * Two things the removal path and the consent flag owe the user, both about
- * credentials rather than about the catalog.
+ * What the removal path owes the user about credentials rather than the
+ * catalog.
  */
 describe("rpc credentials", () => {
   it("deletes a removed server's stored OAuth credentials", async () => {
@@ -481,45 +470,6 @@ describe("rpc credentials", () => {
     expect(tokens.getTokens("notion")).toBeUndefined();
   });
 
-  it("refuses to switch off the prompt for a Google server", async () => {
-    host = createFakePluginHost({ pluginId: "mcp-hub" });
-    const handle = new Database(":memory:");
-    for (const statement of MCP_MIGRATIONS) handle.exec(statement);
-    const registry = createRegistry(handle);
-    registry.upsertServer({
-      id: "gmail", displayName: "Gmail", transport: "http", kind: "remote" as const,
-      url: "https://mcp.googleapis.com/mcp", command: null, args: [], env: {}, headers: {},
-      cwd: null, enabled: true, createdAt: 1,
-      oauthClientId: null, oauthClientSecret: null, oauthScopes: null,
-      authError: null, authErrorAt: null,
-    });
-    registry.replaceCatalog("gmail", [{
-      serverId: "gmail", upstreamName: "search_mail", registeredName: "search_mail",
-      description: "Search mail", inputSchema: { type: "object" },
-      readOnly: true, ask: true, askOverridden: false, defaultEnabled: false,
-      stale: false, syncedAt: 1,
-    }]);
-    registerRpc(host.bb, {
-      registry,
-      catalog: { sync: async () => [], syncAll: async () => {} },
-      pool: { listTools: async () => [] },
-      oauth: {
-        begin: async () => ({ authorizeUrl: "https://auth.example/authorize" }),
-        complete: async () => ({ serverId: "notion" }),
-        status: () => "disconnected" as const,
-        forget: () => {},
-        registeredRedirectUri: () => null,
-      },
-      onAuthChanged: () => {},
-      stderrTail: () => [],
-      onCatalogChanged: () => {},
-      onSelectionChanged: () => {},
-      dropClient: async () => {},
-    });
-    await expect(call(host, "tool_set_ask", {
-      serverId: "gmail", upstreamName: "search_mail", ask: false,
-    })).rejects.toThrow(/always/i);
-  });
 });
 
 /**
@@ -552,8 +502,7 @@ describe("rpc token estimate", () => {
     });
     registry.replaceCatalog("notion", entries.map((entry) => ({
       serverId: "notion", ...entry, inputSchema: schema,
-      readOnly: true, ask: false, askOverridden: false,
-      defaultEnabled: false, stale: false, syncedAt: 1,
+      readOnly: true, defaultEnabled: false, stale: false, syncedAt: 1,
     })));
     registerRpc(host.bb, {
       registry,

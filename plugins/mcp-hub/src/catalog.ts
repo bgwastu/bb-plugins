@@ -1,6 +1,6 @@
 import type { ClientPool } from "./mcp/client-pool.js";
 import { resolveName } from "./mcp/naming.js";
-import type { CatalogTool, Registry, ServerRecord } from "./storage/registry.js";
+import type { CatalogTool, Registry } from "./storage/registry.js";
 
 /**
  * The cached view of what each MCP server offers.
@@ -10,59 +10,10 @@ import type { CatalogTool, Registry, ServerRecord } from "./storage/registry.js"
  * to a server, and it runs from an explicit RPC or the background refresh, so
  * the plugin load path can never block on an unreachable server.
  */
-/**
- * Hosts whose tools always prompt, whatever `readOnlyHint` says.
- *
- * Design section 12.1 names prompt injection as the plugin's first risk and
- * Gmail as its worst case: reading an attacker-authored mail IS the attack, so
- * a read annotation buys a Google Workspace tool nothing. The host is the only
- * handle there is: nothing in an MCP catalog says whose mail this is.
- */
-const ALWAYS_ASK_HOSTS = ["googleapis.com", "google.com"] as const;
-
-/**
- * Whether every tool from `server` must prompt regardless of its annotation
- * and regardless of what the user clicked.
- *
- * Deliberately not overridable: a user who switches the prompt off for a
- * Gmail tool has disarmed the mitigation for the risk it exists to cover, and
- * the panel says so rather than offering the switch.
- */
-export function alwaysAsks(server: Pick<ServerRecord, "transport" | "url">): boolean {
-  if (server.transport !== "http" || server.url === null) return false;
-  try {
-    const host = new URL(server.url).hostname.toLowerCase();
-    return ALWAYS_ASK_HOSTS.some((candidate) => host === candidate || host.endsWith(`.${candidate}`));
-  } catch {
-    return false;
-  }
-}
-
 export interface Catalog {
   /** Fetch tools/list for one server and persist the diff. Returns added names. */
   sync(serverId: string): Promise<string[]>;
   syncAll(): Promise<void>;
-}
-
-/**
- * What `ask` should be for one tool on this sync.
- *
- * The rule the old one-liner got wrong: `read_only` is rewritten on every
- * sync, so a DERIVED `ask` has to be rewritten with it. A tool that was
- * advertised as read-only and now is not has to start asking again, or a
- * server that flips the annotation after the user bound the tool disarms the
- * consent gate silently and permanently. Only a choice the user made by hand
- * outranks the annotation - and nothing outranks a forced-ask host.
- */
-function resolveAsk(
-  prior: CatalogTool | undefined,
-  readOnly: boolean,
-  forceAsk: boolean,
-): boolean {
-  if (forceAsk) return true;
-  if (prior?.askOverridden) return prior.ask;
-  if (prior && prior.readOnly === readOnly) return prior.ask;
-  return !readOnly;
 }
 
 /**
@@ -119,7 +70,6 @@ export function createCatalog(deps: {
         .map((row) => [row.upstreamName, row]),
     );
 
-    const forceAsk = alwaysAsks(server);
     const syncedAt = Date.now();
     const rows: CatalogTool[] = [];
     const added: string[] = [];
@@ -145,10 +95,6 @@ export function createCatalog(deps: {
         description: tool.description,
         inputSchema: tool.inputSchema,
         readOnly: tool.readOnly,
-        ask: resolveAsk(prior, tool.readOnly, forceAsk),
-        // A forced-ask server has no user decision to preserve: the flag is
-        // kept off so the row never claims a choice the user cannot make.
-        askOverridden: forceAsk ? false : prior?.askOverridden ?? false,
         // Carried forward like the name: the default is the user's answer to
         // "everywhere or nowhere", and a server that answers tools/list has
         // no say in it. A sync that dropped it would switch the tool off in

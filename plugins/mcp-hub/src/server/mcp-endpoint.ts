@@ -16,11 +16,8 @@ export const MCP_ENDPOINT_PATH = "/mcp";
  *
  * Some agents (Antigravity's ACP adapter, for one) never forward the tools BB
  * injects into a thread, so this exposes the hub as an ordinary MCP server they
- * can be pointed at once. Two rules keep it from being a way around the
- * consent gate. A tool that asks is left out entirely, because a request with
- * no thread has nobody to put the prompt in front of. A disabled server and a
- * tool the catalog no longer lists are left out for the same reasons they are
- * everywhere else.
+ * can be pointed at once. A disabled server and a tool the catalog no longer
+ * lists are left out for the same reasons they are everywhere else.
  */
 export function endpointTools(registry: Registry): CatalogTool[] {
   const enabled = new Set(
@@ -28,7 +25,7 @@ export function endpointTools(registry: Registry): CatalogTool[] {
   );
   return registry
     .listTools()
-    .filter((tool) => enabled.has(tool.serverId) && !tool.stale && tool.defaultEnabled && !tool.ask);
+    .filter((tool) => enabled.has(tool.serverId) && !tool.stale && tool.defaultEnabled);
 }
 
 function buildServer(deps: {
@@ -75,7 +72,7 @@ function buildServer(deps: {
  *
  * Stateless: every request gets its own server and transport, so there is no
  * session to leak or expire. Token auth, because an open loopback endpoint
- * would let any local process run these tools without the consent gate.
+ * would let any local process run these tools.
  */
 export function registerMcpEndpoint(
   bb: BbPluginApi,

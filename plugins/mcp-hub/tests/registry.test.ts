@@ -22,8 +22,7 @@ describe("registry", () => {
     registry.replaceCatalog("notion", [{
       serverId: "notion", upstreamName: "notion-search",
       registeredName: "notion-search", description: "Search",
-      inputSchema: { type: "object" }, readOnly: true, ask: false,
-      askOverridden: false, defaultEnabled: false, stale: false, syncedAt: 1,
+      inputSchema: { type: "object" }, readOnly: true, defaultEnabled: false, stale: false, syncedAt: 1,
     }]);
     expect(registry.listTools("notion")).toHaveLength(1);
     expect(registry.getToolByRegisteredName("notion-search")?.readOnly).toBe(true);
@@ -57,7 +56,7 @@ describe("registry", () => {
     const tool = {
       serverId: "s", upstreamName: "gone", registeredName: "gone",
       description: "", inputSchema: { type: "object" }, readOnly: true,
-      ask: false, askOverridden: false, defaultEnabled: false, stale: false, syncedAt: 1,
+      defaultEnabled: false, stale: false, syncedAt: 1,
     };
     registry.replaceCatalog("s", [tool]);
     registry.replaceCatalog("s", []);
@@ -96,7 +95,7 @@ describe("registry", () => {
     registry.replaceCatalog("s", [{
       serverId: "s", upstreamName: "present", registeredName: "present",
       description: "", inputSchema: { type: "object" }, readOnly: true,
-      ask: false, askOverridden: false, defaultEnabled: false, stale: true, syncedAt: 1,
+      defaultEnabled: false, stale: true, syncedAt: 1,
     }]);
     expect(registry.getToolByRegisteredName("present")?.stale).toBe(false);
   });
@@ -148,7 +147,7 @@ describe("registry", () => {
     registry.replaceCatalog("s", [{
       serverId: "s", upstreamName: "tool-a", registeredName: "tool-a",
       description: "", inputSchema: { type: "object" }, readOnly: true,
-      ask: false, askOverridden: false, defaultEnabled: false, stale: false, syncedAt: 1,
+      defaultEnabled: false, stale: false, syncedAt: 1,
     }]);
     registry.setBinding("proj_a", "tool-a", true);
 

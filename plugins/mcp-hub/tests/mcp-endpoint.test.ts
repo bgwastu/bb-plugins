@@ -23,7 +23,15 @@ async function load(): Promise<Host> {
   return host;
 }
 
-async function rpc(active: Host, method: string, params?: unknown): Promise<any> {
+interface RpcReply {
+  result: {
+    tools: Array<{ name: string }>;
+    content: unknown;
+    isError?: boolean;
+  };
+}
+
+async function rpc(active: Host, method: string, params?: unknown): Promise<RpcReply> {
   const response = await active.harness.behavior.fetchHttp("POST", "/mcp", {
     headers: {
       "content-type": "application/json",
@@ -31,13 +39,10 @@ async function rpc(active: Host, method: string, params?: unknown): Promise<any>
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   } as never);
-  return response.json();
+  return (await response.json()) as RpcReply;
 }
 
-const allow = async (active: Host): Promise<void> => {
-  await active.harness.behavior.callRpc("tool_set_ask", {
-    serverId: "echo", upstreamName: "echo", ask: false,
-  });
+const enable = async (active: Host): Promise<void> => {
   await active.harness.behavior.callRpc("tools_set_default", {
     registeredNames: ["echo"], defaultEnabled: true,
   });
@@ -58,29 +63,24 @@ describe("mcp endpoint", () => {
     expect(response.status).toBe(405);
   });
 
-  it("leaves out a tool that asks, since no thread exists to prompt in", async () => {
+  it("leaves out a tool nobody enabled by default", async () => {
     const active = await load();
-    await active.harness.behavior.callRpc("tools_set_default", {
-      registeredNames: ["echo"], defaultEnabled: true,
-    });
     const listed = await rpc(active, "tools/list");
     expect(listed.result.tools).toEqual([]);
-    const called = await rpc(active, "tools/call", { name: "echo", arguments: { text: "hi" } });
-    expect(called.result.isError).toBe(true);
   });
 
-  it("lists and runs a tool that does not ask", async () => {
+  it("lists and runs an enabled tool", async () => {
     const active = await load();
-    await allow(active);
+    await enable(active);
     const listed = await rpc(active, "tools/list");
-    expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["echo"]);
+    expect(listed.result.tools.map((tool) => tool.name)).toEqual(["echo"]);
     const called = await rpc(active, "tools/call", { name: "echo", arguments: { text: "hello" } });
     expect(called.result.content).toEqual([{ type: "text", text: "hello" }]);
   });
 
   it("goes quiet when the server is switched off", async () => {
     const active = await load();
-    await allow(active);
+    await enable(active);
     await active.harness.behavior.callRpc("servers_set_enabled", { id: "echo", enabled: false });
     expect((await rpc(active, "tools/list")).result.tools).toEqual([]);
   });

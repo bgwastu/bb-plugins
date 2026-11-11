@@ -56,20 +56,6 @@ So a search that found nothing is not an answer about what you can do:
   about some server in your provider's own MCP list is about that server
   alone.
 
-## Write tools ask the user first
-
-Every tool the server does not mark read-only prompts the user for
-confirmation before it runs, once per thread per tool. That prompt is not an
-error and not something to route around:
-
-- Wait for it. A prompt that is pending is not a failed call.
-- If the user declines, the call returns a refusal. Accept it, tell the user
-  what you were going to do, and stop. Do not retry the same call, look for an
-  unguarded tool that does the same thing, or split the write into smaller
-  calls to slip under the prompt.
-- Read-only tools never prompt, so exploring is cheap. Prefer reading before
-  writing.
-
 ## Seeing what is configured
 
 Run `bb mcp-hub` (or `bb mcp-hub list`) in a shell. It prints every configured server,

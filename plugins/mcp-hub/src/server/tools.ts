@@ -39,8 +39,8 @@ export function statusLabel(prefix: string, upstreamName: string): string {
 }
 
 /**
- * Runs one catalog tool. Injected so the consent gate can wrap the upstream
- * call without this module knowing that consent exists.
+ * Runs one catalog tool. Injected so tests and the HTTP endpoint can supply
+ * their own upstream call.
  */
 export type ToolExecutor = (
   tool: CatalogTool,
@@ -114,7 +114,7 @@ function mapFor(
 /**
  * The part of a row a registration freezes.
  *
- * `ask`, `readOnly`, staleness and the owner are all re-read inside `execute`
+ * `readOnly`, staleness and the owner are all re-read inside `execute`
  * on every call, so they follow the catalog on their own. The description and
  * the input schema have no such path: they are copied into `registerTool` once
  * and there is no way to put new ones in front of the model afterwards.
@@ -255,7 +255,7 @@ export function registerCatalogTools(
           },
         },
         async execute(params: unknown, ctx: PluginAgentToolContext) {
-          // Re-read the row instead of closing over it: `ask`, the schema and
+          // Re-read the row instead of closing over it: the schema and
           // staleness all change under a live registration, and there is no
           // way to re-register a name to pick the new values up.
           const current = deps.registry.getToolByRegisteredName(registeredName);

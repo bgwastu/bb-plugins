@@ -9,7 +9,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { MCP_CHANGED } from "./contract.js";
 import { createCatalog } from "./src/catalog.js";
-import { createConsentGate, withConsent } from "./src/consent.js";
 import { createClientPool } from "./src/mcp/client-pool.js";
 import { createStdioSupervisor, loginShellPath } from "./src/mcp/stdio.js";
 import { createHttpTransport, createStdioTransport } from "./src/mcp/transport.js";
@@ -131,17 +130,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     }
   }
 
-  // The plugin's only protection against a silent write. BB puts every plugin
-  // tool into Claude Code's `allowedTools` and Codex forwards tool calls with
-  // no approval hook, so `canUseTool` never fires for these and no provider
-  // will ask on our behalf (design section 9).
-  const consent = createConsentGate({
-    requestInput: (request, options) => bb.ui.requestInput(request, options),
-    // Read at prompt time: the display name is what the user recognises, and
-    // a server renamed since registration must prompt under its new name.
-    serverName: (serverId) => registry.getServer(serverId)?.displayName ?? serverId,
-  });
-  const rawExecute = createMcpExecutor({
+  const execute = createMcpExecutor({
     registry, pool, stderrTail: (serverId) => stdio.stderrTail(serverId),
     // Only ever consulted for a `readOnly` tool: a write is never replayed.
     refreshAuth: (serverId) => oauth.refresh(serverId),
@@ -154,13 +143,6 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
       reportConfiguration();
     },
     });
-  const execute = withConsent(rawExecute, consent);
-
-  // A thread-scoped allowance must not outlive its thread: a recycled id
-  // would inherit approvals the new thread's user never gave.
-  for (const event of ["thread.archived", "thread.deleted"] as const) {
-    bb.events.on(event, ({ thread }) => consent.forgetThread(thread.id));
-  }
   const selection = createSelectionStore({
     registry,
     registeredOwners: () => registeredToolOwners(bb),
@@ -219,7 +201,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     dropClient: (serverId) => pool.close(serverId),
   });
   // Ask-flagged tools never reach this: it has no thread to prompt in.
-  registerMcpEndpoint(bb, { registry, execute: rawExecute });
+  registerMcpEndpoint(bb, { registry, execute });
   registerCli(bb, { registry });
   registerProviderEnv(bb);
   registerServices(bb, {

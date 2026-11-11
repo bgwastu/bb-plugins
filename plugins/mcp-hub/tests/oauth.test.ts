@@ -540,8 +540,7 @@ describe("401 handling", () => {
   function tool(readOnly: boolean): CatalogTool {
     return {
       serverId: "notion", upstreamName: "search", registeredName: "search",
-      description: "", inputSchema: {}, readOnly, ask: !readOnly,
-      askOverridden: false, defaultEnabled: false, stale: false, syncedAt: 1,
+      description: "", inputSchema: {}, readOnly, defaultEnabled: false, stale: false, syncedAt: 1,
     };
   }
 

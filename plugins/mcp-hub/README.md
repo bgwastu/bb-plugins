@@ -9,8 +9,7 @@ A connected server's tools are registered as ordinary BB agent tools under the
 name the server gives them, so every provider BB supports can call them without
 knowing MCP exists. A name two servers both want gets a `<server>_` prefix on
 whichever asked second, and that resolved name is then persisted and never
-reassigned. Tools the server does not mark read-only prompt the user for
-confirmation before they run.
+reassigned.
 
 ## Connection types
 
@@ -79,7 +78,7 @@ Two things it does not cover:
 - `src/server/` - the surfaces: agent tools, RPC, HTTP routes, per-project
   tool selection, the provider environment, the CLI, and the background
   schedule.
-- `src/ui/` - the connections panel and the consent prompt.
+- `src/ui/` - the connections panel.
 - `skills/mcp/SKILL.md` - what agents are told about MCP tools.
 
 ## Signing in
@@ -140,8 +139,8 @@ something to do to someone who did not ask for it.
 
 Two surfaces, neither of which the user has to write:
 
-- `skills/mcp/SKILL.md` - how MCP tools work here, what a gateway is, what the
-  consent prompt means, and what each failure message is asking for.
+- `skills/mcp/SKILL.md` - how MCP tools work here, what a gateway is, and what
+  each failure message is asking for.
 - Dynamic instructions from `bb.agents.configure`, rebuilt on every sync,
   naming each connected gateway and the services it reaches. A provider that
   defers a tool to a bare name and loads its description only on a keyword
@@ -172,9 +171,9 @@ Two surfaces, neither of which the user has to write:
   it, and that search matches whole words, so without this an agent asked
   about Notion finds nothing and reports that nothing offers Notion.
   `bb mcp-hub list` prints the same list for a shell.
-- **Writes ask.** BB puts plugin tools into the provider's allow list and no
-  provider will ask on this plugin's behalf, so the consent gate is the only
-  thing between an agent and a silent write.
+- **Nothing asks.** Tools run as soon as an agent calls them. BB puts plugin
+  tools into the provider's allow list, so there is no prompt of any kind;
+  what an agent can reach is decided by which servers and tools are enabled.
 - **A write is never replayed.** A 401 buys one refresh and one retry for a
   read-only tool. A write that fails is reported, not repeated.
 - **A live connection never carries a stale bearer.** The HTTP transport

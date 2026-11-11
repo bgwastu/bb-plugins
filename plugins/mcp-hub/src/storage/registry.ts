@@ -80,15 +80,6 @@ export interface CatalogTool {
   description: string;
   inputSchema: Record<string, unknown>;
   readOnly: boolean; // from annotations.readOnlyHint, default false
-  ask: boolean; // consent flag, defaults to !readOnly
-  /**
-   * The user set `ask` by hand, so it is no longer a default.
-   *
-   * Without this there is no way to tell "the user said never ask" from "the
-   * server said read-only once", and the second must follow the annotation it
-   * was derived from while the first must not.
-   */
-  askOverridden: boolean;
   /**
    * Available in every project that has not overridden it off.
    *
@@ -133,7 +124,6 @@ export interface Registry {
   listTools(serverId?: string): CatalogTool[];
   getToolByRegisteredName(name: string): CatalogTool | undefined;
   replaceCatalog(serverId: string, tools: CatalogTool[]): void; // marks missing stale
-  setToolAsk(serverId: string, upstreamName: string, ask: boolean): void;
   /** Returns how many rows the flag actually moved. */
   setToolDefaults(
     tools: Array<{ serverId: string; upstreamName: string }>,
@@ -175,8 +165,6 @@ interface ToolRow {
   description: string;
   input_schema: string;
   read_only: number;
-  ask: number;
-  ask_overridden: number;
   default_enabled: number;
   stale: number;
   synced_at: number;
@@ -214,8 +202,6 @@ function toolFromRow(row: ToolRow): CatalogTool {
     description: row.description,
     inputSchema: JSON.parse(row.input_schema) as Record<string, unknown>,
     readOnly: row.read_only === 1,
-    ask: row.ask === 1,
-    askOverridden: row.ask_overridden === 1,
     defaultEnabled: row.default_enabled === 1,
     stale: row.stale === 1,
     syncedAt: row.synced_at,
@@ -303,7 +289,7 @@ export function createRegistry(db: Database.Database): Registry {
     )
     VALUES (
       @serverId, @upstreamName, @registeredName, @description, @inputSchema,
-      @readOnly, @ask, @askOverridden, @defaultEnabled, @stale, @syncedAt
+      @readOnly, 0, 0, @defaultEnabled, @stale, @syncedAt
     )
     -- registered_name and default_enabled are inserted but never updated:
     -- both are the user's, not the server's. Updating the default here would
@@ -313,18 +299,11 @@ export function createRegistry(db: Database.Database): Registry {
       description = excluded.description,
       input_schema = excluded.input_schema,
       read_only = excluded.read_only,
-      ask = excluded.ask,
-      ask_overridden = excluded.ask_overridden,
       stale = excluded.stale,
       synced_at = excluded.synced_at
   `);
   const markStaleStmt = db.prepare(
     "UPDATE tools SET stale = 1 WHERE server_id = ? AND upstream_name = ?",
-  );
-  // Setting `ask` by hand is what makes it a decision rather than a default,
-  // so the two are written together and can never disagree.
-  const setToolAskStmt = db.prepare(
-    "UPDATE tools SET ask = ?, ask_overridden = 1 WHERE server_id = ? AND upstream_name = ?",
   );
   const setToolDefaultStmt = db.prepare(
     "UPDATE tools SET default_enabled = ? WHERE server_id = ? AND upstream_name = ?",
@@ -362,8 +341,6 @@ export function createRegistry(db: Database.Database): Registry {
         description: tool.description,
         inputSchema: JSON.stringify(tool.inputSchema),
         readOnly: tool.readOnly ? 1 : 0,
-        ask: tool.ask ? 1 : 0,
-        askOverridden: tool.askOverridden ? 1 : 0,
         defaultEnabled: tool.defaultEnabled ? 1 : 0,
         // replaceCatalog's contract is "this IS the current catalog" -- every
         // incoming row is fresh by definition, so freshness is enforced here
@@ -478,10 +455,6 @@ export function createRegistry(db: Database.Database): Registry {
 
     replaceCatalog(serverId: string, tools: CatalogTool[]): void {
       replaceCatalogTx(serverId, tools);
-    },
-
-    setToolAsk(serverId: string, upstreamName: string, ask: boolean): void {
-      setToolAskStmt.run(ask ? 1 : 0, serverId, upstreamName);
     },
 
     setToolDefaults(

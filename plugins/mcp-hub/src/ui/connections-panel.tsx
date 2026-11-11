@@ -639,9 +639,6 @@ export function ConnectionsPanel(props: { subPath?: string }): ReactElement {
         <ToolTable
           tools={tools}
           servers={servers ?? []}
-          alwaysAskServers={new Set(
-            (servers ?? []).filter((entry) => entry.alwaysAsk).map((entry) => entry.id),
-          )}
           projects={projects}
           projectId={projectId}
           overrides={overrides}
@@ -652,11 +649,6 @@ export function ConnectionsPanel(props: { subPath?: string }): ReactElement {
           )}
           onDefault={(registeredNames, defaultEnabled) => mutate(
             () => rpcRef.current.call("tools_set_default", { registeredNames, defaultEnabled }),
-          )}
-          onAsk={(tool, ask) => mutate(
-            () => rpcRef.current.call("tool_set_ask", {
-              serverId: tool.serverId, upstreamName: tool.upstreamName, ask,
-            }),
           )}
         />
         )}
@@ -1586,7 +1578,6 @@ function ToolTable(props: {
    * bug, and a user who sees it greyed out with the reason underneath
    * understands the trade being made for them.
    */
-  alwaysAskServers: ReadonlySet<string>;
   projects: McpProjectDto[];
   projectId: string;
   /** The chosen project's overrides. An absent name inherits the default. */
@@ -1595,7 +1586,6 @@ function ToolTable(props: {
   onProjectChange(projectId: string): void;
   onBind(registeredName: string, state: BindingState): Promise<boolean>;
   onDefault(registeredNames: string[], defaultEnabled: boolean): Promise<boolean>;
-  onAsk(tool: McpToolDto, ask: boolean): Promise<boolean>;
 }): ReactElement {
   const [query, setQuery] = useState("");
   const [server, setServer] = useState(ALL_SERVERS);
@@ -1758,7 +1748,6 @@ function ToolTable(props: {
           {grouped.map((tool, index) => {
             const startsGroup = index === 0 || grouped[index - 1]?.serverId !== tool.serverId;
             const groupCount = grouped.filter((entry) => entry.serverId === tool.serverId).length;
-            const forced = props.alwaysAskServers.has(tool.serverId);
             const override = props.overrides.get(tool.registeredName);
             const isExpanded = expanded === tool.registeredName;
             return (
@@ -1852,24 +1841,8 @@ function ToolTable(props: {
                     the plugin is reloaded: <code>bb plugin reload mcp</code>.
                   </p>
                 ) : null}
-                {forced ? (
-                  <p className="text-xs text-muted-foreground">
-                    Always asks: reading an attacker-authored message from a
-                    Google account is itself the attack this prompt exists for,
-                    so a read-only marking does not switch it off.
-                  </p>
-                ) : null}
                 {isExpanded ? <ToolDetails registeredName={tool.registeredName} /> : null}
               </div>
-              <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                <Checkbox
-                  aria-label={`Ask before running ${tool.registeredName}`}
-                  checked={tool.ask}
-                  disabled={props.busy || forced}
-                  onCheckedChange={(value) => { void props.onAsk(tool, value === true); }}
-                />
-                Ask
-              </label>
             </div>
             </Fragment>
             );

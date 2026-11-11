@@ -1,18 +1,14 @@
 // @vitest-environment jsdom
 //
-// The frontend half: that both slots are registered under the ids the backend
-// names, and that the consent prompt maps a click to the decision the gate
-// reads. Deliberately not exhaustive component coverage - what is pinned here
+// The frontend half: that the panel slot is registered under the id the
+// backend names. Deliberately not exhaustive component coverage - what is pinned here
 // is the wiring that would fail silently.
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
-import type { PluginPendingInteractionProps } from "@get-bb/plugin-sdk/app";
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  CONSENT_RENDERER_ID,
   MCP_CHANGED,
-  type McpConsentPayload,
   type McpProjectDto,
   type McpRpcContract,
   type McpServerDto,
@@ -77,7 +73,7 @@ function httpServer(overrides: Partial<McpServerDto> = {}): McpServerDto {
     id: "notion", displayName: "Notion", transport: "http", kind: "remote",
     url: "https://mcp.notion.com/mcp", command: null, args: [], env: {}, headers: {},
     cwd: null, enabled: true, createdAt: 1, authStatus: "disconnected",
-    alwaysAsk: false, oauthClientId: null, hasOauthClientSecret: false,
+    oauthClientId: null, hasOauthClientSecret: false,
     oauthScopes: null, authError: null, registeredRedirectUri: null, ...overrides,
   };
 }
@@ -86,8 +82,7 @@ function stdioServer(displayName: string, id = displayName.toLowerCase()): McpSe
   return {
     id, displayName, transport: "stdio", kind: "local", url: null, command: "npx",
     args: ["-y", "server-filesystem"], env: {}, headers: {}, cwd: null, enabled: true,
-    createdAt: 1, authStatus: null, alwaysAsk: false,
-    oauthClientId: null, hasOauthClientSecret: false, oauthScopes: null,
+    createdAt: 1, authStatus: null, oauthClientId: null, hasOauthClientSecret: false, oauthScopes: null,
     authError: null, registeredRedirectUri: null,
   };
 }
@@ -95,8 +90,7 @@ function stdioServer(displayName: string, id = displayName.toLowerCase()): McpSe
 function tool(overrides: Partial<McpToolDto> = {}): McpToolDto {
   return {
     serverId: "notion", upstreamName: "search", registeredName: "notion_search",
-    description: "Search Notion pages", readOnly: true, ask: false,
-    defaultEnabled: false, stale: false, driftedFromRegistration: false,
+    description: "Search Notion pages", readOnly: true, defaultEnabled: false, stale: false, driftedFromRegistration: false,
     syncedAt: 1, schemaBytes: 120,
     estimatedTokens: 45,
     ...overrides,
@@ -105,31 +99,6 @@ function tool(overrides: Partial<McpToolDto> = {}): McpToolDto {
 
 function app() {
   return loadPluginApp(() => import("../app.js"));
-}
-
-const payload: McpConsentPayload = {
-  serverName: "Gmail",
-  toolName: "gmail_send",
-  summary: '{"to":"alice@example.com","subject":"Hi"}',
-  destructive: true,
-};
-
-function consentProps(
-  overrides: Partial<PluginPendingInteractionProps> = {},
-): PluginPendingInteractionProps {
-  return {
-    interaction: {
-      id: "int_1",
-      threadId: "thread_1",
-      title: 'Run "gmail_send" on Gmail?',
-      payload,
-      createdAt: 0,
-      expiresAt: null,
-    },
-    submit: vi.fn(async () => {}),
-    cancel: vi.fn(async () => {}),
-    ...overrides,
-  };
 }
 
 /** Every method the contract declares; the panel only calls some of them. */
@@ -153,7 +122,6 @@ function rpcHandlers(
         parameters: [], inputSchema: "{}",
       },
     }),
-    tool_set_ask: () => ({ ok: true }),
     bindings_list: () => ({ overrides: [] }),
     binding_set: () => ({ ok: true }),
     tools_set_default: () => ({ updated: 0 }),
@@ -165,58 +133,9 @@ function rpcHandlers(
 }
 
 describe("app registration", () => {
-  it("registers the panel and the consent renderer under the contract's id", async () => {
+  it("registers the panel under the contract's id", async () => {
     const captured = await app();
     expect(captured.navPanels.map((panel) => panel.id)).toEqual(["mcp-hub"]);
-    // The string match is the whole backend-to-frontend link: the gate passes
-    // this id to `bb.ui.requestInput`, and a mismatch leaves every write tool
-    // waiting on a prompt that never renders.
-    expect(captured.pendingInteractions.map((entry) => entry.id))
-      .toEqual([CONSENT_RENDERER_ID]);
-  });
-});
-
-describe("consent prompt", () => {
-  it("shows the server, the tool and the arguments being approved", async () => {
-    const captured = await app();
-    const view = renderSlot(captured.pendingInteractions[0], consentProps());
-    // Asserted over the whole prompt: the tool name appears in more than one
-    // place on purpose, and what matters is that all three are visible.
-    const text = view.baseElement.textContent ?? "";
-    expect(text).toContain("gmail_send");
-    expect(text).toContain("Gmail");
-    expect(text).toContain("alice@example.com");
-  });
-
-  it.each([
-    ["Allow once", "once"],
-    ["Always allow gmail_send in this thread", "thread"],
-    ["Deny", "deny"],
-  ])("submits %s as %s", async (label, decision) => {
-    const captured = await app();
-    const props = consentProps();
-    const view = renderSlot(captured.pendingInteractions[0], props);
-    await userEvent.click(view.getByRole("button", { name: label }));
-    expect(props.submit).toHaveBeenCalledWith({ decision });
-  });
-
-  it("says a thread grant is not limited to these arguments", async () => {
-    const captured = await app();
-    const view = renderSlot(captured.pendingInteractions[0], consentProps());
-    // A thread grant is argument-independent, and "Allow for this thread"
-    // reads to a user as "allow this call".
-    expect(view.getByText(/with any\s+arguments/)).toBeDefined();
-  });
-
-  it("cancels rather than denies when the payload cannot be read", async () => {
-    const captured = await app();
-    const props = consentProps({
-      interaction: { ...consentProps().interaction, payload: { nope: true } },
-    });
-    const view = renderSlot(captured.pendingInteractions[0], props);
-    await userEvent.click(view.getByRole("button", { name: "Dismiss" }));
-    expect(props.cancel).toHaveBeenCalled();
-    expect(props.submit).not.toHaveBeenCalled();
   });
 });
 
