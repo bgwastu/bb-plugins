@@ -95,6 +95,11 @@ export function registerMcpEndpoint(
     }
   };
   bb.http.route("POST", MCP_ENDPOINT_PATH, handle as never, { auth: "token" });
-  bb.http.route("GET", MCP_ENDPOINT_PATH, handle as never, { auth: "token" });
-  bb.http.route("DELETE", MCP_ENDPOINT_PATH, handle as never, { auth: "token" });
+  // No sessions means nothing to stream to or tear down. A GET answered with an
+  // SSE stream that closes at once sends a client into a reconnect loop, so
+  // both say 405, which the streamable-HTTP spec tells a client to accept.
+  const notAllowed = (): Response =>
+    new Response("Method Not Allowed", { status: 405, headers: { allow: "POST" } });
+  bb.http.route("GET", MCP_ENDPOINT_PATH, notAllowed, { auth: "token" });
+  bb.http.route("DELETE", MCP_ENDPOINT_PATH, notAllowed, { auth: "token" });
 }

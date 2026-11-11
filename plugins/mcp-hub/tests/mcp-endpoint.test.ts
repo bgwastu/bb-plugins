@@ -52,6 +52,12 @@ describe("mcp endpoint", () => {
     for (const route of routes) expect(route.auth).toBe("token");
   });
 
+  it("answers a standalone stream request with 405 so a client does not loop", async () => {
+    const active = await load();
+    const response = await active.harness.behavior.fetchHttp("GET", "/mcp");
+    expect(response.status).toBe(405);
+  });
+
   it("leaves out a tool that asks, since no thread exists to prompt in", async () => {
     const active = await load();
     await active.harness.behavior.callRpc("tools_set_default", {
