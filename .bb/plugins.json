@@ -9,6 +9,7 @@
     { "name": "pi", "source": "./plugins/pi" },
     { "name": "usagi", "source": "./plugins/usagi" },
     { "name": "voice-groq", "source": "./plugins/voice-groq" },
-    { "name": "bb-sidebar", "source": "./plugins/bb-sidebar" }
+    { "name": "bb-sidebar", "source": "./plugins/bb-sidebar" },
+    { "name": "mcp-hub", "source": "./plugins/mcp-hub" }
   ]
 }
