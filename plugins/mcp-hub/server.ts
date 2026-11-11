@@ -18,6 +18,7 @@ import { createOAuthFlow, type OAuthFlow } from "./src/oauth/flow.js";
 import { registerCli } from "./src/server/cli.js";
 import { createSelectionStore, registerConfigure } from "./src/server/configure.js";
 import { quietLogger, warnQuietly } from "./src/server/log.js";
+import { registerMcpEndpoint } from "./src/server/mcp-endpoint.js";
 import { registerProviderEnv } from "./src/server/provider-env.js";
 import { oauthRedirectUri, registerOAuthRoutes } from "./src/server/routes.js";
 import { registerRpc } from "./src/server/rpc.js";
@@ -140,22 +141,20 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     // a server renamed since registration must prompt under its new name.
     serverName: (serverId) => registry.getServer(serverId)?.displayName ?? serverId,
   });
-  const execute = withConsent(
-    createMcpExecutor({
-      registry, pool, stderrTail: (serverId) => stdio.stderrTail(serverId),
-      // Only ever consulted for a `readOnly` tool: a write is never replayed.
-      refreshAuth: (serverId) => oauth.refresh(serverId),
-      // A 401 that outlives a refresh is the other way a grant turns out to
-      // be dead. Recorded here so the panel says it too, rather than the only
-      // record being an error one agent saw once.
-      reportAuthFailure: (serverId, message) => {
-        registry.setAuthError(serverId, message);
-        bb.realtime.publish(MCP_CHANGED, null);
-        reportConfiguration();
-      },
-    }),
-    consent,
-  );
+  const rawExecute = createMcpExecutor({
+    registry, pool, stderrTail: (serverId) => stdio.stderrTail(serverId),
+    // Only ever consulted for a `readOnly` tool: a write is never replayed.
+    refreshAuth: (serverId) => oauth.refresh(serverId),
+    // A 401 that outlives a refresh is the other way a grant turns out to
+    // be dead. Recorded here so the panel says it too, rather than the only
+    // record being an error one agent saw once.
+    reportAuthFailure: (serverId, message) => {
+      registry.setAuthError(serverId, message);
+      bb.realtime.publish(MCP_CHANGED, null);
+      reportConfiguration();
+    },
+    });
+  const execute = withConsent(rawExecute, consent);
 
   // A thread-scoped allowance must not outlive its thread: a recycled id
   // would inherit approvals the new thread's user never gave.
@@ -219,6 +218,8 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     onSelectionChanged: () => { selection.refresh(); },
     dropClient: (serverId) => pool.close(serverId),
   });
+  // Ask-flagged tools never reach this: it has no thread to prompt in.
+  registerMcpEndpoint(bb, { registry, execute: rawExecute });
   registerCli(bb, { registry });
   registerProviderEnv(bb);
   registerServices(bb, {
