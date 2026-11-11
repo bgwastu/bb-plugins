@@ -6,7 +6,7 @@ A collection of plugins for [BB](https://getbb.app).
 
 - `bb-sidebar`
 - `bell`
-- `mcp-hub` (add an MCP server once; its tools reach every harness as bb tools. Fork of [vojtad/bb-plugin-mcp](https://github.com/vojtad/bb-plugin-mcp))
+- `mcp-hub` (one MCP server list for every harness)
 - `mise`
 - `pi`
 - `plain-copy` (copying selected timeline text yields plain text instead of Markdown)

@@ -1,9 +1,4 @@
-# MCP Hub (bb-plugin-mcp-hub)
-
-> Fork of [vojtad/bb-plugin-mcp](https://github.com/vojtad/bb-plugin-mcp) (initial commit 6eab202, 2026-09-19).
-> Upstream publishes no license. Changes here: the plugin id, panel route, `bb mcp-hub` CLI and
-> skill are renamed from `mcp` so they coexist with bb's built-in `bb--mcp` plugin (`bb mcp`).
-> The AI planning docs under `docs/superpowers/` were not copied.
+# bb-plugin-mcp-hub
 
 
 Connect MCP servers to BB - local stdio processes and remote endpoints, on
