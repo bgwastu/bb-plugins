@@ -1231,7 +1231,12 @@ function ServerRow(props: {
               carrying five buttons made the destructive one as prominent as
               the one the user came for. */}
           {needsConnect ? (
-            <Button size="sm" disabled={props.busy || off} onClick={props.onConnect}>
+            <Button
+              size="sm"
+              variant={server.authStatus === "connected" && !bad ? "ghost" : "default"}
+              disabled={props.busy || off}
+              onClick={props.onConnect}
+            >
               {server.authStatus === "disconnected" ? "Connect" : "Reconnect"}
             </Button>
           ) : null}
