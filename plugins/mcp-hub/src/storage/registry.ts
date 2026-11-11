@@ -120,6 +120,8 @@ export interface Registry {
   ): void;
   /** Replaces the whole header map: an absent header is one that was deleted. */
   setServerHeaders(id: string, headers: Record<string, string>): void;
+  /** Switches a whole server on or off without touching its catalog or credentials. */
+  setServerEnabled(id: string, enabled: boolean): void;
   /**
    * Records why this server's credentials stopped working, or clears it with
    * `null`. Idempotent: the same message written twice does not move the
@@ -260,6 +262,9 @@ export function createRegistry(db: Database.Database): Registry {
   `);
   const setServerHeadersStmt = db.prepare(
     "UPDATE servers SET headers = @headers WHERE id = @id",
+  );
+  const setServerEnabledStmt = db.prepare(
+    "UPDATE servers SET enabled = @enabled WHERE id = @id",
   );
   // The `auth_error IS NOT @message` guard is what keeps `auth_error_at`
   // meaning "since when": the background refresh rediscovers the same dead
@@ -445,6 +450,10 @@ export function createRegistry(db: Database.Database): Registry {
 
     setServerHeaders(id: string, headers: Record<string, string>): void {
       setServerHeadersStmt.run({ id, headers: JSON.stringify(headers) });
+    },
+
+    setServerEnabled(id: string, enabled: boolean): void {
+      setServerEnabledStmt.run({ id, enabled: enabled ? 1 : 0 });
     },
 
     setAuthError(id: string, message: string | null): void {

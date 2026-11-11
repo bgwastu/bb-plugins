@@ -263,6 +263,16 @@ export function registerRpc(bb: BbPluginApi, deps: RpcDeps): void {
       return { ok: true };
     },
 
+    servers_set_enabled: async (input) => {
+      requireServer(input.id);
+      deps.registry.setServerEnabled(input.id, input.enabled);
+      // A switched-off server should not keep a live connection open.
+      if (!input.enabled) await deps.dropClient(input.id);
+      deps.onCatalogChanged();
+      changed();
+      return { ok: true };
+    },
+
     servers_remove: async (input) => {
       const existed = deps.registry.getServer(input.id) !== undefined;
       // Cascades to this server's catalog rows and their bindings. The tool

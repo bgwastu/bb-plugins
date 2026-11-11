@@ -364,6 +364,16 @@ export const rpcContract = defineRpcContract({
     input: z.object({ id: z.string(), headers: headersSchema }),
     output: okSchema,
   },
+  /**
+   * Switch a whole server on or off. Off keeps its catalog, bindings and
+   * credentials: the server is simply left out of every thread's tool
+   * selection and out of the background catalog sweep until it is turned back
+   * on.
+   */
+  servers_set_enabled: {
+    input: z.object({ id: z.string(), enabled: z.boolean() }),
+    output: okSchema,
+  },
   servers_remove: {
     input: z.object({ id: z.string() }),
     output: z.object({ removed: z.boolean() }),

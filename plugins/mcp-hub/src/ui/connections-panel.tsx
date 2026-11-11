@@ -3,7 +3,7 @@
 //
 // Every read goes through the plugin's own RPC contract, so this file never
 // learns anything about MCP that the backend did not choose to publish.
-import { type ReactElement, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactElement, useCallback, useEffect, useRef, useState } from "react";
 import {
   useBbNavigate,
   useRealtime,
@@ -30,6 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { MAX_SELECTED_TOOLS } from "../server/configure.js";
 import {
@@ -242,6 +243,8 @@ export function ConnectionsPanel(props: { subPath?: string }): ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [tab, setTab] = useState<"servers" | "tools">("servers");
+  const [serverQuery, setServerQuery] = useState("");
   const [callback, setCallback] = useState<CallbackState | null>(null);
 
   /**
@@ -428,23 +431,98 @@ export function ConnectionsPanel(props: { subPath?: string }): ReactElement {
     });
   };
 
-  return (
-    <div className="h-full min-h-0 overflow-y-auto p-4 md:p-5">
-      <div className="mx-auto w-full max-w-3xl">
-        <div className="flex h-8 items-center gap-2">
-          <h1 className="text-sm font-medium text-foreground">MCP servers</h1>
-          <span className="text-xs text-muted-foreground">
-            {servers === null ? "Loading" : `${servers.length}`}
-          </span>
-          <Button
-            size="sm"
-            className="ml-auto"
-            onClick={() => { setAdding((value) => !value); }}
-          >
-            {adding ? "Cancel" : "Add server"}
-          </Button>
-        </div>
+  const serverList = servers ?? [];
+  const activeServers = serverList.filter((server) => server.enabled).length;
+  const needle = serverQuery.trim().toLowerCase();
+  const visibleServers = serverList.filter((server) => needle === ""
+    || server.displayName.toLowerCase().includes(needle)
+    || server.id.toLowerCase().includes(needle)
+    || describeTransport(server).toLowerCase().includes(needle));
+  const liveToolCount = tools.filter((tool) => !tool.stale).length;
 
+  const tabButton = (value: "servers" | "tools", label: string, count: number): ReactElement => (
+    <button
+      type="button"
+      onClick={() => { setTab(value); }}
+      className={`flex items-center gap-1.5 rounded-[5px] px-2.5 py-1 text-xs font-medium transition-all ${tab === value
+        ? "bg-background font-semibold text-foreground shadow-xs"
+        : "text-muted-foreground hover:text-foreground"}`}
+    >
+      <span>{label}</span>
+      <span
+        className={`rounded-full px-1.5 font-mono text-[10px] ${tab === value
+          ? "bg-primary/15 text-primary"
+          : "bg-muted text-muted-foreground"}`}
+      >
+        {count}
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      <div className="shrink-0 border-b border-border/80 bg-card/40 px-3 py-2 sm:px-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
+              {tabButton("servers", "Servers", serverList.length)}
+              {tabButton("tools", "Tools", liveToolCount)}
+            </div>
+            {tab === "servers" && serverList.length > 0 ? (
+              <div className="hidden items-center gap-2 pl-1 text-[11px] text-muted-foreground md:flex">
+                <span className="flex items-center gap-1">
+                  <span className="size-1.5 rounded-full bg-emerald-400" />
+                  {activeServers} active
+                </span>
+                {serverList.length - activeServers > 0 ? (
+                  <span className="flex items-center gap-1">
+                    <span className="size-1.5 rounded-full bg-muted-foreground/50" />
+                    {serverList.length - activeServers} disabled
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            {tab === "servers" ? (
+              <div className="relative w-36 sm:w-52">
+                <Icon
+                  name="Search"
+                  className="pointer-events-none absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
+                />
+                <Input
+                  aria-label="Filter servers"
+                  className="h-7 bg-background/80 pl-7 pr-6 text-xs"
+                  value={serverQuery}
+                  placeholder="Filter servers…"
+                  onChange={(event) => { setServerQuery(event.target.value); }}
+                />
+                {serverQuery === "" ? null : (
+                  <button
+                    type="button"
+                    aria-label="Clear filter"
+                    onClick={() => { setServerQuery(""); }}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <Icon name="X" className="size-3" />
+                  </button>
+                )}
+              </div>
+            ) : null}
+            <Button
+              size="sm"
+              className="h-7 shrink-0 px-2.5 text-xs"
+              onClick={() => { setAdding((value) => !value); setTab("servers"); }}
+            >
+              <Icon name="Plus" className="mr-1 size-3.5" />
+              {adding ? "Cancel" : "Add Server"}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+      <div className="mx-auto w-full max-w-5xl">
         {adding ? (
           <AddServerForm
             busy={busy}
@@ -460,14 +538,14 @@ export function ConnectionsPanel(props: { subPath?: string }): ReactElement {
         ) : null}
 
         {error === null ? null : (
-          <p className="mt-3 rounded-md border border-border bg-card p-2 text-xs text-destructive">
+          <p className="mb-3 rounded-md border border-border bg-card p-2 text-xs text-destructive">
             {error}
           </p>
         )}
 
         {callback === null ? null : (
           <p
-            className={`mt-3 rounded-md border p-2 text-xs ${callback.ok
+            className={`mb-3 rounded-md border p-2 text-xs ${callback.ok
               ? "border-border bg-card text-muted-foreground"
               : "border-destructive/40 bg-destructive/5 text-destructive"}`}
           >
@@ -476,7 +554,7 @@ export function ConnectionsPanel(props: { subPath?: string }): ReactElement {
         )}
 
         <NeedsAttention
-          servers={(servers ?? []).filter((server) => server.authError !== null)}
+          servers={serverList.filter((server) => server.authError !== null)}
           busy={busy}
           onConnect={onConnect}
         />
@@ -487,47 +565,77 @@ export function ConnectionsPanel(props: { subPath?: string }): ReactElement {
           onReload={() => mutate(() => rpcRef.current.call("plugin_reload", null))}
         />
 
-        <div className="mt-3 space-y-2">
-          {servers === null ? null : servers.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No MCP servers yet. Add one to make its tools available to your threads.
-            </p>
-          ) : servers.map((server) => (
-            <ServerRow
-              key={server.id}
-              server={server}
-              busy={busy}
-              redirectUri={redirectUri}
-              toolCount={tools.filter((tool) => tool.serverId === server.id && !tool.stale).length}
-              test={tests[server.id] ?? null}
-              onSync={async () => {
-                const ok = await mutate(
-                  () => rpcRef.current.call("catalog_sync", { serverId: server.id }),
-                );
-                if (ok) clearTest(server.id);
-                return ok;
-              }}
-              onConnect={() => { onConnect(server); }}
-              onTest={() => { onTest(server); }}
-              onSaveOAuthClient={(client) => mutate(
-                () => rpcRef.current.call("servers_set_oauth_client", {
-                  id: server.id, ...client,
-                }),
-              )}
-              onSaveHeaders={(headers) => mutate(
-                () => rpcRef.current.call("servers_set_headers", { id: server.id, headers }),
-              )}
-              onRemove={async () => {
-                const ok = await mutate(
-                  () => rpcRef.current.call("servers_remove", { id: server.id }),
-                );
-                if (ok) clearTest(server.id);
-                return ok;
-              }}
-            />
-          ))}
-        </div>
-
+        {tab === "servers" ? (
+          <div className="space-y-2.5">
+            {servers === null ? null : serverList.length === 0 ? (
+              <div className="space-y-3 rounded-xl border border-dashed border-border bg-muted/5 p-10 text-center">
+                <div className="mx-auto flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  <Icon name="Toolbox" className="size-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">No MCP servers yet</h3>
+                  <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
+                    Add one to make its tools available to every harness in your threads.
+                  </p>
+                </div>
+                <Button size="sm" className="h-8 text-xs" onClick={() => { setAdding(true); }}>
+                  <Icon name="Plus" className="mr-1 size-3.5" />
+                  Add First Server
+                </Button>
+              </div>
+            ) : visibleServers.length === 0 ? (
+              <div className="space-y-2 rounded-lg border border-dashed border-border bg-muted/5 p-8 text-center">
+                <p className="text-xs text-muted-foreground sm:text-sm">
+                  No servers match "{serverQuery}"
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => { setServerQuery(""); }}
+                >
+                  Clear Filter
+                </Button>
+              </div>
+            ) : visibleServers.map((server) => (
+              <ServerRow
+                key={server.id}
+                server={server}
+                busy={busy}
+                redirectUri={redirectUri}
+                toolCount={tools.filter((tool) => tool.serverId === server.id && !tool.stale).length}
+                test={tests[server.id] ?? null}
+                onToggle={(enabled) => mutate(
+                  () => rpcRef.current.call("servers_set_enabled", { id: server.id, enabled }),
+                )}
+                onSync={async () => {
+                  const ok = await mutate(
+                    () => rpcRef.current.call("catalog_sync", { serverId: server.id }),
+                  );
+                  if (ok) clearTest(server.id);
+                  return ok;
+                }}
+                onConnect={() => { onConnect(server); }}
+                onTest={() => { onTest(server); }}
+                onSaveOAuthClient={(client) => mutate(
+                  () => rpcRef.current.call("servers_set_oauth_client", {
+                    id: server.id, ...client,
+                  }),
+                )}
+                onSaveHeaders={(headers) => mutate(
+                  () => rpcRef.current.call("servers_set_headers", { id: server.id, headers }),
+                )}
+                onRemove={async () => {
+                  const ok = await mutate(
+                    () => rpcRef.current.call("servers_remove", { id: server.id }),
+                  );
+                  if (ok) clearTest(server.id);
+                  return ok;
+                }}
+              />
+            ))}
+          </div>
+        ) : (
         <ToolTable
           tools={tools}
           servers={servers ?? []}
@@ -551,6 +659,8 @@ export function ConnectionsPanel(props: { subPath?: string }): ReactElement {
             }),
           )}
         />
+        )}
+      </div>
       </div>
     </div>
   );
@@ -1020,6 +1130,7 @@ function ServerRow(props: {
   busy: boolean;
   /** The callback URL this server's OAuth client has to be told about. */
   redirectUri: string;
+  onToggle(enabled: boolean): Promise<boolean>;
   onSync(): Promise<boolean>;
   onConnect(): void;
   onTest(): void;
@@ -1032,52 +1143,119 @@ function ServerRow(props: {
   const { server, test } = props;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const remote = server.transport === "http";
+  const target = describeTransport(server);
+  const status = describeStatus(server, props.toolCount);
+  const bad = server.authError !== null;
+  const good = !bad && (status === "Connected" || status === "No sign-in needed"
+    || status === "Header auth" || status === "Local process");
+  const needsConnect = remote && !isOpenServer(server, props.toolCount)
+    && !isHeaderAuthenticated(server);
+  const headerCount = Object.keys(server.headers).length;
+  const off = !server.enabled;
   return (
-    <div className="rounded-md border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-foreground">{server.displayName}</span>
-        <span
-          className={`text-xs ${server.authError === null
-            ? "text-muted-foreground"
-            : "text-destructive"}`}
-        >
-          {describeStatus(server, props.toolCount)}
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {props.toolCount} {props.toolCount === 1 ? "tool" : "tools"}
-        </span>
-        <div className="ml-auto flex items-center gap-1">
+    <div
+      className={`rounded-lg border border-border bg-card p-3.5 shadow-xs transition-colors ${off
+        ? "border-border/50 bg-muted/20 opacity-70"
+        : "hover:border-border/90"}`}
+    >
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+          <Switch
+            className="mt-0.5 sm:mt-0"
+            checked={server.enabled}
+            disabled={props.busy}
+            aria-label={`${server.enabled ? "Disable" : "Enable"} ${server.displayName}`}
+            title={server.enabled ? "Disable server" : "Enable server"}
+            onCheckedChange={(enabled) => { void props.onToggle(enabled); }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`text-sm font-semibold tracking-tight ${off
+                  ? "text-muted-foreground line-through"
+                  : "text-foreground"}`}
+              >
+                {server.displayName}
+              </span>
+              <span
+                className={`rounded border px-1.5 font-mono text-[10px] font-medium uppercase ${remote
+                  ? "border-sky-500/20 bg-sky-500/10 text-sky-400"
+                  : "border-purple-500/20 bg-purple-500/10 text-purple-400"}`}
+              >
+                {remote ? "http" : "stdio"}
+              </span>
+              <span
+                className={`rounded border px-1.5 text-[10px] font-medium ${bad
+                  ? "border-destructive/30 bg-destructive/10 text-destructive"
+                  : good
+                    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+                    : "border-border bg-muted/60 text-muted-foreground"}`}
+              >
+                {status}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {props.toolCount} {props.toolCount === 1 ? "tool" : "tools"}
+              </span>
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5">
+              <span
+                className="max-w-[280px] select-all truncate font-mono text-xs text-muted-foreground sm:max-w-md"
+                title={target}
+              >
+                {target}
+              </span>
+              <button
+                type="button"
+                aria-label={`Copy the address of ${server.displayName}`}
+                title="Copy URL / command"
+                className="shrink-0 rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+                onClick={() => { void navigator.clipboard?.writeText(target); }}
+              >
+                <Icon name="Copy" className="size-3" />
+              </button>
+              {headerCount === 0 ? null : (
+                <span
+                  className="rounded border border-border/40 bg-muted/60 px-1.5 font-mono text-[10px] text-muted-foreground/70"
+                  title={`Headers: ${Object.keys(server.headers).join(", ")}`}
+                >
+                  {headerCount} header{headerCount > 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center justify-end gap-1 border-t border-border/40 pt-2 sm:border-t-0 sm:pt-0">
           {/* One primary action per row. Everything else - headers, the OAuth
               client, syncing, removing - lives behind Settings, because a row
               carrying five buttons made the destructive one as prominent as
               the one the user came for. */}
-          {remote && !isOpenServer(server, props.toolCount) ? (
-            // Offering Connect to a header-authenticated server is offering an
-            // error: the RPC refuses it, and nothing about a typed-in token is
-            // fixed by OAuth.
-            isHeaderAuthenticated(server) ? null : (
-              <Button size="sm" disabled={props.busy} onClick={props.onConnect}>
-                {server.authStatus === "disconnected" ? "Connect" : "Reconnect"}
-              </Button>
-            )
-          ) : (
-            <Button size="sm" disabled={props.busy} onClick={props.onTest}>
-              Test
+          {needsConnect ? (
+            <Button size="sm" disabled={props.busy || off} onClick={props.onConnect}>
+              {server.authStatus === "disconnected" ? "Connect" : "Reconnect"}
             </Button>
-          )}
+          ) : null}
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
+            className="size-8 text-muted-foreground hover:text-foreground"
+            disabled={props.busy || off}
+            aria-label={`Test ${server.displayName}`}
+            onClick={props.onTest}
+          >
+            <Icon name="Zap" className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 text-muted-foreground hover:text-foreground"
+            aria-label={`Settings for ${server.displayName}`}
             onClick={() => { setSettingsOpen(true); }}
           >
-            Settings
+            <Icon name="Settings" className="size-3.5" />
           </Button>
         </div>
       </div>
-
-      <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
-        {describeTransport(server)}
-      </p>
 
       {server.authError === null ? null : (
         <p className="mt-2 text-xs text-destructive">{server.authError.message}</p>
@@ -1439,6 +1617,15 @@ function ToolTable(props: {
       || tool.upstreamName.toLowerCase().includes(needle)
       || tool.description.toLowerCase().includes(needle);
   });
+  // Grouped by server so one server's twelve tools do not bury another's one.
+  // A stable sort: the backend's order inside a server is kept.
+  const serverNames = new Map(props.servers.map((entry) => [entry.id, entry.displayName]));
+  const serverOrder = props.servers.map((entry) => entry.id);
+  const grouped = [...shown].sort((a, b) => {
+    const left = serverOrder.indexOf(a.serverId);
+    const right = serverOrder.indexOf(b.serverId);
+    return (left === -1 ? Infinity : left) - (right === -1 ? Infinity : right);
+  });
   const shownNames = shown.map((tool) => tool.registeredName);
 
   // The backend's own rule, run here: defaults, minus what this project
@@ -1461,7 +1648,7 @@ function ToolTable(props: {
   };
 
   return (
-    <div className="mt-5">
+    <div>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <h2 className="text-sm font-medium text-foreground">Tools</h2>
         {/*
@@ -1563,12 +1750,21 @@ function ToolTable(props: {
         </div>
       ) : (
         <div className="mt-2 divide-y divide-border rounded-md border border-border bg-card">
-          {shown.map((tool) => {
+          {grouped.map((tool, index) => {
+            const startsGroup = index === 0 || grouped[index - 1]?.serverId !== tool.serverId;
+            const groupCount = grouped.filter((entry) => entry.serverId === tool.serverId).length;
             const forced = props.alwaysAskServers.has(tool.serverId);
             const override = props.overrides.get(tool.registeredName);
             const isExpanded = expanded === tool.registeredName;
             return (
-            <div key={tool.registeredName} className="flex items-start gap-3 p-3">
+            <Fragment key={tool.registeredName}>
+            {startsGroup ? (
+              <div className="flex items-center gap-2 bg-muted/30 px-3 py-1.5 text-xs font-medium text-foreground">
+                <span>{serverNames.get(tool.serverId) ?? tool.serverId}</span>
+                <span className="font-mono text-[10px] text-muted-foreground">{groupCount}</span>
+              </div>
+            ) : null}
+            <div className="flex items-start gap-3 p-3">
               {defaultsMode ? (
                 <Checkbox
                   className="mt-0.5"
@@ -1670,6 +1866,7 @@ function ToolTable(props: {
                 Ask
               </label>
             </div>
+            </Fragment>
             );
           })}
         </div>

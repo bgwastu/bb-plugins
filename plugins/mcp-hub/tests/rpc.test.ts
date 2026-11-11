@@ -406,6 +406,25 @@ describe("rpc servers_set_headers", () => {
     expect(dropped).toEqual(["notion"]);
   });
 
+  it("switches a server off and on, and drops its client when it goes off", async () => {
+    host = createFakePluginHost({ pluginId: "mcp-hub" });
+    const dropped: string[] = [];
+    registerRpc(host.bb, deps([remote], async (serverId) => { dropped.push(serverId); }));
+    await call(host, "servers_set_enabled", { id: "notion", enabled: false });
+    expect((await call(host, "servers_list", null)).servers[0].enabled).toBe(false);
+    expect(dropped).toEqual(["notion"]);
+    await call(host, "servers_set_enabled", { id: "notion", enabled: true });
+    expect((await call(host, "servers_list", null)).servers[0].enabled).toBe(true);
+    expect(dropped).toEqual(["notion"]);
+  });
+
+  it("refuses to switch an unknown server", async () => {
+    host = createFakePluginHost({ pluginId: "mcp-hub" });
+    registerRpc(host.bb, deps([], async () => {}));
+    await expect(call(host, "servers_set_enabled", { id: "nope", enabled: false }))
+      .rejects.toThrow();
+  });
+
   it("refuses a stdio server, which sends no requests", async () => {
     host = createFakePluginHost({ pluginId: "mcp-hub" });
     registerRpc(host.bb, deps([{

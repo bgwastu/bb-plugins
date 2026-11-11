@@ -141,6 +141,7 @@ function rpcHandlers(
     servers_add: () => ({ server: null as never }),
     servers_set_oauth_client: () => ({ ok: true }),
     servers_set_headers: () => ({ ok: true }),
+    servers_set_enabled: () => ({ ok: true }),
     servers_remove: () => ({ removed: true }),
     servers_connect: () => ({ authorizeUrl: "https://auth.example/authorize" }),
     servers_test: () => ({ ok: true, toolCount: 0, error: null, stderr: [] }),
@@ -220,12 +221,61 @@ describe("consent prompt", () => {
 });
 
 describe("connections panel", () => {
+  it("switches a server off from its row", async () => {
+    const captured = await app();
+    const view = renderSlot(captured.navPanels[0], { subPath: "" }, {
+      rpc: rpcHandlers({ servers_list: () => ({ servers: [stdioServer("Files", "files")] }) }),
+    });
+    await userEvent.click(await view.findByRole("switch", { name: "Disable Files" }));
+    const sent = view.inspection.rpcCalls.filter((entry) => entry.method === "servers_set_enabled");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.input).toEqual({ id: "files", enabled: false });
+  });
+
+  it("dims a disabled server and offers to switch it back on", async () => {
+    const captured = await app();
+    const off = { ...stdioServer("Files", "files"), enabled: false };
+    const view = renderSlot(captured.navPanels[0], { subPath: "" }, {
+      rpc: rpcHandlers({ servers_list: () => ({ servers: [off] }) }),
+    });
+    expect(await view.findByRole("switch", { name: "Enable Files" })).toBeDefined();
+    expect(view.getByText("1 disabled")).toBeDefined();
+  });
+
+  it("filters the server list by name and says so when nothing matches", async () => {
+    const captured = await app();
+    const view = renderSlot(captured.navPanels[0], { subPath: "" }, {
+      rpc: rpcHandlers({
+        servers_list: () => ({
+          servers: [stdioServer("Files", "files"), stdioServer("Search", "search")],
+        }),
+      }),
+    });
+    expect(await view.findByText("Files")).toBeDefined();
+    await userEvent.type(view.getByLabelText("Filter servers"), "sear");
+    expect(view.queryByText("Files")).toBeNull();
+    expect(view.getByText("Search")).toBeDefined();
+    await userEvent.type(view.getByLabelText("Filter servers"), "zzz");
+    expect(await view.findByText(/No servers match/)).toBeDefined();
+    await userEvent.click(view.getByRole("button", { name: "Clear Filter" }));
+    expect(await view.findByText("Files")).toBeDefined();
+  });
+
+  it("shows an empty state with a way to add the first server", async () => {
+    const captured = await app();
+    const view = renderSlot(captured.navPanels[0], { subPath: "" }, {
+      rpc: rpcHandlers({ servers_list: () => ({ servers: [] }) }),
+    });
+    await userEvent.click(await view.findByRole("button", { name: "Add First Server" }));
+    expect(await view.findByRole("button", { name: "Cancel" })).toBeDefined();
+  });
+
   it("keeps the toolbar mounted while the first fetch is in flight", async () => {
     const captured = await app();
     const view = renderSlot(captured.navPanels[0], { subPath: "" }, {
       rpc: rpcHandlers({ servers_list: () => new Promise(() => ({})) }),
     });
-    expect(view.getByRole("button", { name: "Add server" })).toBeDefined();
+    expect(view.getByRole("button", { name: "Add Server" })).toBeDefined();
   });
 
   it("lists a server and shows its stderr tail when Test fails", async () => {
@@ -242,7 +292,7 @@ describe("connections panel", () => {
       }),
     });
     expect(await view.findByText("Files")).toBeDefined();
-    await userEvent.click(view.getByRole("button", { name: "Test" }));
+    await userEvent.click(view.getByRole("button", { name: /^Test / }));
     // The diagnostic no other MCP client shows.
     expect(await view.findByText(/No such file or directory/)).toBeDefined();
   });
@@ -261,10 +311,10 @@ describe("connections panel", () => {
       }),
     });
     expect(await view.findByText("Files")).toBeDefined();
-    await userEvent.click(view.getByRole("button", { name: "Test" }));
+    await userEvent.click(view.getByRole("button", { name: /^Test / }));
     expect(await view.findByText(/No such file or directory/)).toBeDefined();
     // A sync that worked has just disproved the failure the tail describes.
-    await userEvent.click(view.getByRole("button", { name: "Settings" }));
+    await userEvent.click(view.getByRole("button", { name: /^Settings for / }));
     await userEvent.click(await view.findByRole("button", { name: "Sync tools" }));
     await waitFor(() => {
       expect(view.queryByText(/No such file or directory/)).toBeNull();
@@ -284,7 +334,7 @@ describe("connections panel", () => {
 
     // Removal lives behind Settings now: a permanently red button on every row
     // made the destructive action as prominent as the one users came for.
-    await userEvent.click(view.getByRole("button", { name: "Settings" }));
+    await userEvent.click(view.getByRole("button", { name: /^Settings for / }));
     await userEvent.click(await view.findByRole("button", { name: "Remove Files" }));
     // Removal cascades to the catalog and to every project binding, and the
     // panel cannot undo any of it.
@@ -368,7 +418,7 @@ describe("add server form", () => {
     const view = renderSlot(captured.navPanels[0], { subPath: "" }, {
       rpc: rpcHandlers({ servers_add: () => ({ server: stdioServer("VL", "vl") }) }),
     });
-    await userEvent.click(view.getByRole("button", { name: "Add server" }));
+    await userEvent.click(view.getByRole("button", { name: "Add Server" }));
     await userEvent.click(await view.findByLabelText("Connection type"));
     await userEvent.click(await view.findByRole("option", { name: /Local command/ }));
     await userEvent.type(await view.findByLabelText("Name"), "VL");
@@ -406,7 +456,7 @@ describe("add server form", () => {
     const view = renderSlot(captured.navPanels[0], { subPath: "" }, {
       rpc: rpcHandlers({ servers_add: () => ({ server: httpServer() }) }),
     });
-    await userEvent.click(view.getByRole("button", { name: "Add server" }));
+    await userEvent.click(view.getByRole("button", { name: "Add Server" }));
     // "Remote MCP server" is the default, so nothing is chosen here.
     await userEvent.type(await view.findByLabelText("Name"), "VL");
     await userEvent.type(view.getByLabelText("URL"), "https://vl/mcp");
@@ -440,7 +490,7 @@ describe("add server form", () => {
       }),
     });
     expect(await view.findByText("Files")).toBeDefined();
-    await userEvent.click(view.getByRole("button", { name: "Settings" }));
+    await userEvent.click(view.getByRole("button", { name: /^Settings for / }));
     await userEvent.click(await view.findByRole("button", { name: "Remove Files" }));
     // The warning listed the catalog and the bindings and said nothing about
     // the access and refresh tokens it also destroys.
@@ -463,7 +513,7 @@ describe("headers form", () => {
         }),
       }),
     });
-    await userEvent.click(await view.findByRole("button", { name: "Settings" }));
+    await userEvent.click(await view.findByRole("button", { name: /^Settings for / }));
     const field = await view.findByLabelText("Headers");
     expect((field as HTMLTextAreaElement).value).toBe("X-Api-Key: old\nX-Gone: 1");
 
@@ -519,7 +569,7 @@ describe("oauth client form", () => {
 
   it("saves a client id, a secret and scopes for one server", async () => {
     const view = await panel(httpServer());
-    await userEvent.click(await view.findByRole("button", { name: "Settings" }));
+    await userEvent.click(await view.findByRole("button", { name: /^Settings for / }));
     await userEvent.type(await view.findByLabelText("OAuth client id"), "gcp-id");
     await userEvent.type(view.getByLabelText("OAuth client secret"), "gcp-secret");
     await userEvent.type(view.getByLabelText("OAuth scopes"), "gmail.readonly");
@@ -542,7 +592,7 @@ describe("oauth client form", () => {
     const view = await panel(httpServer({
       oauthClientId: "gcp-id", hasOauthClientSecret: true, oauthScopes: "gmail.readonly",
     }));
-    await userEvent.click(await view.findByRole("button", { name: "Settings" }));
+    await userEvent.click(await view.findByRole("button", { name: /^Settings for / }));
     // The DTO never carries the secret, so the field starts empty over a
     // stored one; sending "" would wipe it on every id correction.
     const secret = await view.findByLabelText("OAuth client secret");
@@ -570,7 +620,7 @@ describe("oauth client form", () => {
       configurable: true, value: { writeText },
     });
     const view = await panel(httpServer());
-    await userEvent.click(await view.findByRole("button", { name: "Settings" }));
+    await userEvent.click(await view.findByRole("button", { name: /^Settings for / }));
     // Every manually created client has to list this, and until now it was
     // only ever quoted inside an error the user had to trigger first.
     expect(await view.findByText(REDIRECT_URI)).toBeDefined();
@@ -612,7 +662,8 @@ describe("tool table", () => {
     overrides?: Array<{ registeredName: string; enabled: boolean }>;
     details?: unknown;
   } = {}) {
-    return app().then((captured) => renderSlot(captured.navPanels[0], { subPath: "" }, {
+    return app().then(async (captured) => {
+      const view = await renderSlot(captured.navPanels[0], { subPath: "" }, {
       rpc: rpcHandlers({
         servers_list: () => ({
           servers: [notion, linear],
@@ -622,8 +673,18 @@ describe("tool table", () => {
         bindings_list: () => ({ overrides: options.overrides ?? [] }),
         ...(options.details === undefined ? {} : { tool_details: () => options.details }),
       }),
-    }));
+    });
+      // The tools live on their own tab; every test here starts on it.
+      await userEvent.click(await view.findByRole("button", { name: /^Tools/ }));
+      return view;
+    });
   }
+
+  it("groups tools under their server's name", async () => {
+    const view = await panel();
+    expect(view.getByText("Notion")).toBeDefined();
+    expect(view.getByText("Linear")).toBeDefined();
+  });
 
   /** Radix opens on click and puts every item behind role="option". */
   async function choose(trigger: HTMLElement, option: string): Promise<void> {
