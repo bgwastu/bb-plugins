@@ -385,7 +385,11 @@ export const rpcContract = defineRpcContract({
        */
       redirectOrigin: z.url(),
     }),
-    output: z.object({ authorizeUrl: z.string() }),
+    /**
+     * `authorizeUrl` is `null` when the server answered without credentials:
+     * there is no sign-in to start, and its tools were already read.
+     */
+    output: z.object({ authorizeUrl: z.string().nullable() }),
   },
   /**
    * Exchange an authorization code the panel caught on its own callback route.

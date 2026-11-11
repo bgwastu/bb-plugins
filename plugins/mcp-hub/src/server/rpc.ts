@@ -299,6 +299,24 @@ export function registerRpc(bb: BbPluginApi, deps: RpcDeps): void {
           + "or clear it and configure an OAuth client to use OAuth instead.",
         );
       }
+      // A server that needs no sign-in (grep.app, DeepWiki, Context7) has no
+      // OAuth to begin, and the flow would fail on it: discovery finds nothing
+      // and dynamic client registration answers 404. So ask it for its tools
+      // first. An answer means it is open: read its catalog and stop there. A
+      // refusal, or an empty answer, is the ordinary sign-in case, and falls
+      // through to the flow exactly as before.
+      try {
+        const tools = await deps.pool.listTools(server);
+        if (tools.length > 0) {
+          await deps.catalog.sync(server.id);
+          deps.registry.setAuthError(server.id, null);
+          deps.onCatalogChanged();
+          changed();
+          return { authorizeUrl: null };
+        }
+      } catch {
+        // Needs credentials; the OAuth flow below is the answer.
+      }
       // Returned, never opened. The backend has no browser, and a URL the
       // panel navigates to is one the user can also see before following.
       return deps.oauth.begin(server.id, server.url, input.redirectOrigin);

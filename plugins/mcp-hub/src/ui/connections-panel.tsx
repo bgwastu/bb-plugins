@@ -182,7 +182,7 @@ function describeTokens(tokens: number): string {
   return `~${(tokens / 1000).toFixed(1)}k tokens`;
 }
 
-function describeStatus(server: McpServerDto): string {
+function describeStatus(server: McpServerDto, toolCount: number): string {
   if (server.transport === "stdio") return "Local process";
   // Ahead of every other answer: a recorded failure is the one fact about this
   // server worth reading, and a stale "Connected" over dead credentials is the
@@ -193,6 +193,8 @@ function describeStatus(server: McpServerDto): string {
   // Before the fallback, or a server whose token is in a header it sends on
   // every request reads as "Not connected" while it is answering calls.
   if (isHeaderAuthenticated(server)) return "Header auth";
+  // No grant and no header, yet its tools are registered: an open server.
+  if (toolCount > 0) return "No sign-in needed";
   return "Not connected";
 }
 
@@ -397,6 +399,12 @@ export function ConnectionsPanel(props: { subPath?: string }): ReactElement {
         // back somewhere it can actually reach.
         redirectOrigin: window.location.origin,
       });
+      // `null`: the server answered without credentials, so there is no sign-in
+      // to follow and its tools are already in the list.
+      if (authorizeUrl === null) {
+        setCallback({ ok: true, message: `Connected ${server.displayName}. No sign-in needed.` });
+        return;
+      }
       navigate.openUrl(authorizeUrl);
     });
   };
@@ -1021,7 +1029,7 @@ function ServerRow(props: {
             ? "text-muted-foreground"
             : "text-destructive"}`}
         >
-          {describeStatus(server)}
+          {describeStatus(server, props.toolCount)}
         </span>
         <span className="text-xs text-muted-foreground">
           {props.toolCount} {props.toolCount === 1 ? "tool" : "tools"}
@@ -1442,7 +1450,7 @@ function ToolTable(props: {
 
   return (
     <div className="mt-5">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <h2 className="text-sm font-medium text-foreground">Tools</h2>
         {/*
           The cap truncates alphabetically and says nothing to the user, and a
@@ -1461,14 +1469,16 @@ function ToolTable(props: {
         <span className="text-xs text-muted-foreground">
           {describeTokens(selectedTokens)}
         </span>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         <Input
-          className="w-40"
+          className="min-w-40 flex-1"
           aria-label="Search tools"
           value={query}
           placeholder="Search"
           onChange={(event) => { setQuery(event.target.value); }}
         />
-        <div className="w-40">
+        <div className="w-44">
           <Select value={serverFilter} onValueChange={setServer}>
             <SelectTrigger aria-label="Filter by server">
               <SelectValue />
@@ -1481,7 +1491,7 @@ function ToolTable(props: {
             </SelectContent>
           </Select>
         </div>
-        <div className="ml-auto w-56">
+        <div className="w-56">
           <Select value={props.projectId} onValueChange={props.onProjectChange}>
             <SelectTrigger aria-label="Project">
               <SelectValue />

@@ -293,6 +293,31 @@ describe("rpc servers_connect", () => {
     ]);
   });
 
+  it("connects a server that needs no sign-in without starting OAuth", async () => {
+    host = createFakePluginHost({ pluginId: "mcp-hub" });
+    const synced: string[] = [];
+    const base = deps([remote], async () => { throw new Error("must not be called"); });
+    registerRpc(host.bb, {
+      ...base,
+      pool: { listTools: async () => [{ name: "search", description: "", inputSchema: {}, readOnly: true }] as never },
+      catalog: { sync: async (id: string) => { synced.push(id); return []; }, syncAll: async () => {} },
+    });
+    expect(await call(host, "servers_connect", { id: "notion", redirectOrigin: "https://bb.example" }))
+      .toEqual({ authorizeUrl: null });
+    expect(synced).toEqual(["notion"]);
+  });
+
+  it("starts OAuth when the server refuses an unauthenticated tools list", async () => {
+    host = createFakePluginHost({ pluginId: "mcp-hub" });
+    const base = deps([remote], async () => ({ authorizeUrl: "https://auth.example/authorize" }));
+    registerRpc(host.bb, {
+      ...base,
+      pool: { listTools: async () => { throw new Error("401 Unauthorized"); } },
+    });
+    expect(await call(host, "servers_connect", { id: "notion", redirectOrigin: "https://bb.example" }))
+      .toEqual({ authorizeUrl: "https://auth.example/authorize" });
+  });
+
   it("refuses a server whose Authorization header already authenticates it", async () => {
     host = createFakePluginHost({ pluginId: "mcp-hub" });
     registerRpc(host.bb, deps([{
