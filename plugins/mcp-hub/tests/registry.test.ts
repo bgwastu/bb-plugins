@@ -185,6 +185,33 @@ describe("registry", () => {
     expect(handle.prepare("SELECT COUNT(*) AS n FROM bindings").get())
       .toEqual({ n: 2 });
   });
+
+  it("drops the consent columns an upgrade left behind", () => {
+    // Nothing reads `ask` any more, so the columns go rather than sit there as
+    // a trap for whoever writes the next read. Found by content, not position,
+    // for the same reason as the test above: migrations are appended.
+    const handle = new Database(":memory:");
+    const dropIndex = MCP_MIGRATIONS
+      .findIndex((statement) => statement.includes("DROP COLUMN ask"));
+    expect(dropIndex).toBeGreaterThan(-1);
+    for (const statement of MCP_MIGRATIONS.slice(0, dropIndex)) handle.exec(statement);
+    // A row with both columns set, so the drop runs against real data.
+    handle.prepare(`
+      INSERT INTO tools (server_id, upstream_name, registered_name, description,
+        input_schema, read_only, ask, ask_overridden, stale, synced_at)
+      VALUES ('s', 'send-mail', 'send-mail', 'Send', '{}', 0, 1, 1, 0, 1)
+    `).run();
+
+    handle.exec(MCP_MIGRATIONS[dropIndex]);
+
+    const columns = handle.prepare("SELECT name FROM pragma_table_info('tools')")
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).not.toContain("ask");
+    expect(columns.map((column) => column.name)).not.toContain("ask_overridden");
+    // The row survives; only the columns go.
+    expect(handle.prepare("SELECT registered_name FROM tools").all())
+      .toEqual([{ registered_name: "send-mail" }]);
+  });
 });
 
 describe("a server's connection kind", () => {

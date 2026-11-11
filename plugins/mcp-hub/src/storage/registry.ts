@@ -285,16 +285,16 @@ export function createRegistry(db: Database.Database): Registry {
   const upsertToolStmt = db.prepare(`
     INSERT INTO tools (
       server_id, upstream_name, registered_name, description, input_schema,
-      read_only, ask, ask_overridden, default_enabled, stale, synced_at
+      read_only, default_enabled, stale, synced_at
     )
     VALUES (
       @serverId, @upstreamName, @registeredName, @description, @inputSchema,
-      @readOnly, 0, 0, @defaultEnabled, @stale, @syncedAt
+      @readOnly, @defaultEnabled, @stale, @syncedAt
     )
     -- registered_name and default_enabled are inserted but never updated:
     -- both are the user's, not the server's. Updating the default here would
     -- let every catalog sync overwrite the choice with whatever the caller
-    -- happened to pass, which is the exact drift migration 8 exists to repair.
+    -- happened to pass, which is the drift a re-derived default used to cause.
     ON CONFLICT(server_id, upstream_name) DO UPDATE SET
       description = excluded.description,
       input_schema = excluded.input_schema,

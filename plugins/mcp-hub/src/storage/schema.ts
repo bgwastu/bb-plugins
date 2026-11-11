@@ -155,4 +155,13 @@ export const MCP_MIGRATIONS: string[] = [
   ALTER TABLE servers ADD COLUMN kind TEXT NOT NULL DEFAULT '';
   UPDATE servers SET kind = CASE transport WHEN 'stdio' THEN 'local' ELSE 'remote' END;
   `,
+  // The consent gate is gone, so these two columns only ever held dead state.
+  // `ask` armed a prompt nothing reads any more, and `ask_overridden` recorded
+  // whether the user had chosen it. Everything written since the gate was
+  // removed is already `0`, so there is no data worth carrying across, and a
+  // column that no decision reads is a column the next reader will misread.
+  `
+  ALTER TABLE tools DROP COLUMN ask;
+  ALTER TABLE tools DROP COLUMN ask_overridden;
+  `,
 ];
