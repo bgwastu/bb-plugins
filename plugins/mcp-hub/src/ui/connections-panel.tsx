@@ -182,6 +182,18 @@ function describeTokens(tokens: number): string {
   return `~${(tokens / 1000).toFixed(1)}k tokens`;
 }
 
+/**
+ * A remote server that needs no sign-in: no grant, no Authorization header, yet
+ * its tools are registered. It has nothing to connect, so its row offers Test.
+ */
+function isOpenServer(server: McpServerDto, toolCount: number): boolean {
+  return server.transport === "http"
+    && server.authStatus === "disconnected"
+    && server.authError === null
+    && !isHeaderAuthenticated(server)
+    && toolCount > 0;
+}
+
 function describeStatus(server: McpServerDto, toolCount: number): string {
   if (server.transport === "stdio") return "Local process";
   // Ahead of every other answer: a recorded failure is the one fact about this
@@ -194,7 +206,7 @@ function describeStatus(server: McpServerDto, toolCount: number): string {
   // every request reads as "Not connected" while it is answering calls.
   if (isHeaderAuthenticated(server)) return "Header auth";
   // No grant and no header, yet its tools are registered: an open server.
-  if (toolCount > 0) return "No sign-in needed";
+  if (isOpenServer(server, toolCount)) return "No sign-in needed";
   return "Not connected";
 }
 
@@ -1039,7 +1051,7 @@ function ServerRow(props: {
               client, syncing, removing - lives behind Settings, because a row
               carrying five buttons made the destructive one as prominent as
               the one the user came for. */}
-          {remote ? (
+          {remote && !isOpenServer(server, props.toolCount) ? (
             // Offering Connect to a header-authenticated server is offering an
             // error: the RPC refuses it, and nothing about a typed-in token is
             // fixed by OAuth.
