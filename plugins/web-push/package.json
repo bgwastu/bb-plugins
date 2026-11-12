@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-web-push",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "bb": ">=0.48",
@@ -16,7 +16,7 @@
     "app": "./app.tsx"
   },
   "scripts": {
-    "test": "node scripts/test-crypto.ts"
+    "test": "node scripts/test-crypto.ts && node scripts/test-service-worker.ts"
   },
   "dependencies": {
     "zod": "^4.6.5"

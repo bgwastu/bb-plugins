@@ -10,5 +10,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["server.ts", "app.tsx", "push-crypto.ts", "service-worker.ts", "web-push-client.ts"]
+  "include": ["server.ts", "app.tsx", "push-crypto.ts", "service-worker.ts", "web-push-client.ts", "focus-lock.ts"]
 }

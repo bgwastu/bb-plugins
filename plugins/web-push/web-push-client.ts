@@ -157,7 +157,7 @@ export async function syncSubscription(): Promise<void> {
  * The gesture path. Requests permission first, so call it straight from a
  * click handler; browsers reject the prompt otherwise.
  */
-export async function enableHere(): Promise<EnableOutcome> {
+export async function enableHere(known?: DeliveryConfig): Promise<EnableOutcome> {
   const support = supportState();
   if (support === "insecure") {
     return { ok: false, error: "Notifications need HTTPS (or localhost)." };
@@ -165,7 +165,9 @@ export async function enableHere(): Promise<EnableOutcome> {
   if (support === "unsupported") {
     return { ok: false, error: "This browser has no service worker push support." };
   }
-  const config = await readConfig();
+  // A caller that already holds the config passes it so no await comes before
+  // the permission prompt and the user gesture survives.
+  const config = known ?? (await readConfig());
   if (!config.enabled) {
     return { ok: false, error: "Web push is turned off in the plugin settings on the server." };
   }
@@ -205,5 +207,83 @@ export async function disableHere(): Promise<void> {
     await subscription.unsubscribe();
   } catch {
     // Nothing else to do: the server row is gone either way.
+  }
+}
+
+const ASKED_KEY = "web-push:permission-asked";
+
+function readAsked(): boolean {
+  try {
+    return window.localStorage.getItem(ASKED_KEY) !== null;
+  } catch {
+    // Storage blocked: behave as if already asked, so we never nag.
+    return true;
+  }
+}
+
+function markAsked(): void {
+  try {
+    window.localStorage.setItem(ASKED_KEY, String(Date.now()));
+  } catch {
+    // Nothing to do; readAsked() already fails closed.
+  }
+}
+
+/**
+ * Asks for notification permission the first time this browser sees bb, on the
+ * first click, key press or tap, which is the earliest moment every browser
+ * lets a page ask. It asks at most once per browser: a dismissed prompt can
+ * still be reopened from the settings section. Returns a disposer.
+ *
+ * The server config is fetched up front, not inside the gesture, so
+ * `Notification.requestPermission()` runs synchronously in the event handler;
+ * Safari and Android Chrome reject or auto-suppress a prompt that has lost its
+ * user activation to an await.
+ */
+export function armFirstGesturePrompt(): () => void {
+  if (supportState() !== "supported") return () => {};
+  if (Notification.permission !== "default" || readAsked()) return () => {};
+  const events = ["click", "keydown", "touchend"] as const;
+  let config: DeliveryConfig | null = null;
+
+  function disarm() {
+    for (const name of events) document.removeEventListener(name, onGesture, true);
+  }
+  function onGesture() {
+    // Config still loading: stay armed and take the next gesture.
+    if (config === null) return;
+    disarm();
+    markAsked();
+    void enableHere(config).catch(() => {
+      // The settings section explains any failure; nothing to surface here.
+    });
+  }
+
+  for (const name of events) document.addEventListener(name, onGesture, true);
+  readConfig().then(
+    (loaded) => {
+      if (loaded.enabled) config = loaded;
+      else disarm();
+    },
+    () => disarm(),
+  );
+  return disarm;
+}
+
+/**
+ * Closes the notifications already shown for a thread, for when the user
+ * lands on it after a push went out.
+ */
+export async function dismissThreadNotifications(threadId: string): Promise<void> {
+  if (supportState() !== "supported" || Notification.permission !== "granted") return;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration(SERVICE_WORKER_SCOPE);
+    if (registration === undefined) return;
+    for (const notification of await registration.getNotifications()) {
+      const data = notification.data as { threadId?: unknown } | null;
+      if (data !== null && data !== undefined && data.threadId === threadId) notification.close();
+    }
+  } catch {
+    // Closing is cosmetic; a failure leaves the notification for the user to swipe.
   }
 }

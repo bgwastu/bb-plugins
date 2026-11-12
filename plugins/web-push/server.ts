@@ -27,6 +27,7 @@ import {
   vapidAuthorization,
   type VapidKeys,
 } from "./push-crypto";
+import { FOCUS_LOCK_PREFIX } from "./focus-lock";
 import { renderServiceWorker } from "./service-worker";
 
 const PLUGIN_ID = "web-push";
@@ -44,6 +45,11 @@ const KV_SUBSCRIPTION_PREFIX = "subscription:";
 const COALESCE_MS = 1_500;
 const REQUEST_TIMEOUT_MS = 10_000;
 const REALTIME_CHANNEL = "web-push-changed";
+const DAY_MS = 86_400_000;
+/** How often to look for browsers that stopped answering. */
+const INACTIVITY_SWEEP_MS = 6 * 3_600_000;
+/** Let the plugin finish loading before the first sweep. */
+const FIRST_SWEEP_DELAY_MS = 30_000;
 
 type Kind = "pending-interaction" | "thread-error" | "turn-finished";
 type Level = "all" | "input-only" | "muted";
@@ -225,6 +231,20 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Notify when a thread fails",
       default: true,
     },
+    skipWhenViewing: {
+      type: "boolean",
+      label: "Skip a notification for the thread you are viewing",
+      description:
+        "Don't show a notification on a device where bb is open and focused on that thread. Other threads, and the same thread on your other devices, still notify.",
+      default: true,
+    },
+    inactiveDays: {
+      type: "number",
+      label: "Forget inactive browsers after (days)",
+      description:
+        "A browser that has neither opened bb nor acknowledged a push for this long is removed. It subscribes again by itself the next time it opens bb. 0 keeps every browser.",
+      default: 7,
+    },
     useThreadLevels: {
       type: "boolean",
       label: "Respect thread notification levels",
@@ -375,6 +395,34 @@ export default async function plugin(bb: BbPluginApi) {
     });
   }
 
+  /**
+   * Drops browsers that went quiet. Activity is the later of the last time the
+   * browser opened bb, the last time its worker acknowledged a push (shown or
+   * skipped), and creation. A removed browser that comes back re-subscribes on
+   * its next load, so this is safe to run eagerly.
+   */
+  async function pruneInactive(): Promise<number> {
+    const { inactiveDays } = await settings.get();
+    if (!(inactiveDays > 0)) return 0;
+    const cutoff = Date.now() - inactiveDays * DAY_MS;
+    const removed = await mutate(async () => {
+      const stale = (await readSubscriptions()).filter(
+        (row) => Math.max(row.createdAt, row.lastSeenAt, row.lastDeliveredAt ?? 0) < cutoff,
+      );
+      for (const row of stale) {
+        await bb.storage.kv.delete(`${KV_SUBSCRIPTION_PREFIX}${row.id}`);
+        bb.log.info(
+          `removed inactive push device "${row.label}" (${row.id}); last active ${new Date(
+            Math.max(row.createdAt, row.lastSeenAt, row.lastDeliveredAt ?? 0),
+          ).toISOString()}`,
+        );
+      }
+      return stale.length;
+    });
+    if (removed > 0) bb.realtime.publish(REALTIME_CHANNEL, { at: Date.now() });
+    return removed;
+  }
+
   let lastOutcome: DeliveryOutcome = { status: "never" };
   async function setOutcome(outcome: DeliveryOutcome): Promise<void> {
     lastOutcome = outcome;
@@ -449,6 +497,7 @@ export default async function plugin(bb: BbPluginApi) {
       kind: payload.kind,
       url: payload.threadId === null ? "/" : `/threads/${payload.threadId}`,
       tag: payload.tag ?? `bb-${payload.kind}${payload.threadId === null ? "" : `-${payload.threadId}`}`,
+      skipWhenViewing: config.skipWhenViewing,
     });
 
     let sent = 0;
@@ -602,7 +651,9 @@ export default async function plugin(bb: BbPluginApi) {
     const thread = await loadThread(entry.threadId);
     if (thread === null) return;
     const lastReadAt = thread.lastReadAt ?? 0;
-    if (lastReadAt >= entry.eventAt) return;
+    // Same rule as the bundled plugin: read after the event and after the
+    // thread last asked for attention.
+    if (lastReadAt >= entry.eventAt && lastReadAt >= thread.latestAttentionAt) return;
 
     const level = await effectiveLevel(thread);
     const allowed = KINDS_BY_LEVEL[level];
@@ -647,6 +698,7 @@ export default async function plugin(bb: BbPluginApi) {
     status: string;
     parentThreadId: string | null;
     lastReadAt: number | null;
+    latestAttentionAt: number;
     archivedAt: number | null;
     deletedAt: number | null;
     visibility: string;
@@ -659,6 +711,7 @@ export default async function plugin(bb: BbPluginApi) {
         status: string;
         parentThreadId: string | null;
         lastReadAt: number | null;
+        latestAttentionAt: number;
         archivedAt: number | null;
         deletedAt: number | null;
         visibility: string;
@@ -743,6 +796,7 @@ export default async function plugin(bb: BbPluginApi) {
           publicKey: vapidKeys.publicKey,
           deliveryPath: `${BASE_PATH}/delivery`,
           resubscribePath: `${BASE_PATH}/resubscribe`,
+          focusLockPrefix: FOCUS_LOCK_PREFIX,
         }),
         {
           headers: {
@@ -875,6 +929,11 @@ export default async function plugin(bb: BbPluginApi) {
         summary: "Remove a subscribed browser",
         usage: "bb web-push remove <id> [--json]",
       },
+      {
+        name: "prune",
+        summary: "Remove browsers inactive for longer than the configured days",
+        usage: "bb web-push prune [--json]",
+      },
       { name: "test", summary: "Send a test notification", usage: "bb web-push test [--json]" },
       {
         name: "send",
@@ -903,6 +962,7 @@ export default async function plugin(bb: BbPluginApi) {
               "  bb web-push list [--json]",
               "  bb web-push key [--json]",
               "  bb web-push remove <id> [--json]",
+              "  bb web-push prune [--json]",
               "  bb web-push test [--json]",
               "  bb web-push send --title <text> [--body <text>] [--thread <id>] [--json]",
             ].join("\n"),
@@ -943,6 +1003,7 @@ export default async function plugin(bb: BbPluginApi) {
             label: row.label,
             host: hostOf(row.endpoint),
             created: new Date(row.createdAt).toISOString(),
+            lastSeen: new Date(row.lastSeenAt).toISOString(),
             lastDelivered:
               row.lastDeliveredAt === null ? null : new Date(row.lastDeliveredAt).toISOString(),
             lastError: row.lastError,
@@ -951,12 +1012,13 @@ export default async function plugin(bb: BbPluginApi) {
           return reply(
             value,
             [
-              "ID\tLabel\tHost\tLast delivered\tLast error",
+              "ID\tLabel\tHost\tLast seen\tLast delivered\tLast error",
               ...rows.map((row) =>
                 [
                   row.id,
                   row.label,
                   hostOf(row.endpoint),
+                  new Date(row.lastSeenAt).toISOString(),
                   row.lastDeliveredAt === null ? "never" : new Date(row.lastDeliveredAt).toISOString(),
                   row.lastError ?? "-",
                 ].join("\t"),
@@ -973,6 +1035,10 @@ export default async function plugin(bb: BbPluginApi) {
           }
           bb.realtime.publish(REALTIME_CHANNEL, { at: Date.now() });
           return reply({ id, removed: true }, `Removed ${id}`);
+        }
+        case "prune": {
+          const removed = await pruneInactive();
+          return reply({ removed }, `Removed ${removed} inactive browser(s).`);
         }
         case "test": {
           const result = await deliver({
@@ -1012,9 +1078,23 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
+  // ----------------------------------------------------------- housekeeping ---
+
+  const sweep = () => {
+    void pruneInactive().catch((error: unknown) => {
+      bb.log.error(`inactive browser sweep failed: ${messageOf(error)}`);
+    });
+  };
+  const firstSweep = setTimeout(sweep, FIRST_SWEEP_DELAY_MS);
+  const sweepTimer = setInterval(sweep, INACTIVITY_SWEEP_MS);
+  firstSweep.unref?.();
+  sweepTimer.unref?.();
+
   // --------------------------------------------------------------- dispose ---
 
   bb.onDispose(() => {
+    clearTimeout(firstSweep);
+    clearInterval(sweepTimer);
     for (const entry of pending.values()) clearTimeout(entry.timer);
     pending.clear();
     bb.log.info("disposed");

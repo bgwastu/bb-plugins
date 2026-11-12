@@ -17,6 +17,8 @@ export type ServiceWorkerConfig = {
   /** Mounted route paths for the SW's own reports. */
   deliveryPath: string;
   resubscribePath: string;
+  /** Name prefix of the Web Lock a focused bb tab holds per thread. */
+  focusLockPrefix: string;
 };
 
 export function renderServiceWorker(config: ServiceWorkerConfig): string {
@@ -24,14 +26,15 @@ export function renderServiceWorker(config: ServiceWorkerConfig): string {
 const APPLICATION_SERVER_KEY = "${config.publicKey}";
 const DELIVERY_PATH = ${JSON.stringify(config.deliveryPath)};
 const RESUBSCRIBE_PATH = ${JSON.stringify(config.resubscribePath)};
-
-self.addEventListener("install", () => {
-  self.skipWaiting();
-});
-
-self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
-});
+const FOCUS_LOCK_PREFIX = ${JSON.stringify(config.focusLockPrefix)};
+// Safari (iOS, iPadOS posing as a Mac, and macOS) requires a visible
+// notification for every push and revokes the subscription after a few silent
+// ones, so it never skips. Chrome on macOS also says "Safari/", hence the
+// exclusions.
+function isSafari(userAgent) {
+  if (/iPhone|iPad|iPod/u.test(userAgent)) return true;
+  return /Safari[/]/u.test(userAgent) && !/(Chrome|Chromium|Edg|OPR|Firefox)[/]/u.test(userAgent);
+}
 
 function decodeApplicationServerKey(value) {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -42,6 +45,28 @@ function decodeApplicationServerKey(value) {
   return bytes;
 }
 
+// True only when this device is looking at the thread right now: a window of
+// this origin has focus (web.dev: the one case where a push may go without a
+// notification) and that window holds the thread's focus lock. Any doubt means
+// false, because a duplicate notification is better than a missed one.
+async function isViewingThread(threadId) {
+  if (threadId === null) return false;
+  try {
+    if (isSafari(self.navigator.userAgent || "")) return false;
+    const locks = self.navigator.locks;
+    if (!locks || typeof locks.query !== "function") return false;
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (!windows.some((client) => client.focused === true)) return false;
+    const snapshot = await locks.query();
+    const wanted = FOCUS_LOCK_PREFIX + threadId;
+    return (snapshot.held || []).some((lock) => lock.name === wanted);
+  } catch {
+    return false;
+  }
+}
+
+// Also sent for a push that was skipped: it proves the device is alive, which
+// is what keeps the subscription from being pruned as inactive.
 async function reportDelivery() {
   try {
     const subscription = await self.registration.pushManager.getSubscription();
@@ -77,8 +102,14 @@ self.addEventListener("push", (event) => {
     badge: "/icon-monochrome-192.png",
     timestamp: Date.now(),
   };
+  const threadId = options.data.threadId;
+  const skipWhenViewing = payload.skipWhenViewing !== false;
   event.waitUntil(
     (async () => {
+      if (skipWhenViewing && (await isViewingThread(threadId))) {
+        await reportDelivery();
+        return;
+      }
       await self.registration.showNotification(title, options);
       await reportDelivery();
     })(),

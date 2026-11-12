@@ -9,11 +9,14 @@
 // The settings section is the only place a permission prompt can come from:
 // Android and iOS both require a user gesture for `Notification.requestPermission()`.
 import { useCallback, useEffect, useState } from "react";
-import { definePluginApp, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
+import { definePluginApp, useBbContext, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
+import { FOCUS_LOCK_PREFIX } from "./focus-lock";
 import {
+  armFirstGesturePrompt,
   describeThisBrowser,
   disableHere,
+  dismissThreadNotifications,
   enableHere,
   existingSubscription,
   notificationPermission,
@@ -211,6 +214,60 @@ function WebPushSettings() {
   );
 }
 
+/**
+ * Tells the service worker which thread this device is looking at, so a push
+ * for it can be skipped instead of buzzing under your hands. While the tab is
+ * visible and focused with a thread open it holds a shared Web Lock named for
+ * that thread; the worker reads it with `navigator.locks.query()`.
+ */
+function FocusPresence() {
+  const { threadId } = useBbContext();
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || navigator.locks === undefined) return;
+    const lock: { threadId: string | null; release: (() => void) | null } = {
+      threadId: null,
+      release: null,
+    };
+
+    const drop = () => {
+      lock.release?.();
+      lock.release = null;
+      lock.threadId = null;
+    };
+    const sync = () => {
+      const wanted =
+        threadId !== null && document.visibilityState === "visible" && document.hasFocus()
+          ? threadId
+          : null;
+      if (wanted === lock.threadId) return;
+      drop();
+      if (wanted === null) return;
+      lock.threadId = wanted;
+      const held = new Promise<void>((resolve) => {
+        lock.release = resolve;
+      });
+      navigator.locks.request(`${FOCUS_LOCK_PREFIX}${wanted}`, { mode: "shared" }, () => held).catch(() => {
+        // A refused lock only means the next push for this thread is shown.
+      });
+      void dismissThreadNotifications(wanted);
+    };
+
+    window.addEventListener("focus", sync);
+    window.addEventListener("blur", sync);
+    document.addEventListener("visibilitychange", sync);
+    sync();
+    return () => {
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
+      document.removeEventListener("visibilitychange", sync);
+      drop();
+    };
+  }, [threadId]);
+
+  return null;
+}
+
 export default definePluginApp((app) => {
   app.contentScripts.register({
     id: "web-push-client",
@@ -224,16 +281,23 @@ export default definePluginApp((app) => {
         });
       };
       sync();
+      const disarmPrompt = armFirstGesturePrompt();
       const onVisible = () => {
         if (document.visibilityState === "visible") sync();
       };
       document.addEventListener("visibilitychange", onVisible);
       return () => {
         active = false;
+        disarmPrompt();
         document.removeEventListener("visibilitychange", onVisible);
         void signal;
       };
     },
+  });
+
+  app.slots.experimental_appOverlay({
+    id: "web-push-focus",
+    component: FocusPresence,
   });
 
   app.slots.settingsSection({
