@@ -120,6 +120,20 @@ throws the authorization code away, while a panel URL is an ordinary app URL.
 The code is then exchanged over the panel's authenticated `oauth_resolve` /
 `oauth_complete` RPC.
 
+## The other MCP source
+
+Claude Code loads the connectors attached to the signed-in claude.ai account on
+its own, outside anything this plugin selects - twelve of them have been
+measured at roughly 188k prompt tokens a session. **Settings -> Plugins -> MCP
+Hub -> Disable claude.ai connectors** sets `ENABLE_CLAUDEAI_MCP_SERVERS=0` on
+every Claude Code thread this plugin runs in. It is off by default, because the
+plugin does not own your provider configuration.
+
+It does not reach servers you wrote into `~/.claude.json` yourself (the only
+lever there is `--strict-mcp-config`, which BB never passes), and Codex has no
+environment variable for this: set `[features] apps = false` in
+`~/.codex/config.toml` by hand, once.
+
 ## Upgrading from 0.1
 
 `src/storage/legacy.ts` imports the old tables once - servers, their tools,

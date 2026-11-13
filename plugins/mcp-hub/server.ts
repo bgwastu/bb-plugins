@@ -25,6 +25,7 @@ import {
   type Restarter,
 } from "./src/server/hub.js";
 import { quietLogger } from "./src/server/log.js";
+import { registerProviderEnv } from "./src/server/provider-env.js";
 import { registerRpc } from "./src/server/rpc.js";
 import { resolveSelection, TOOL_LIMIT } from "./src/server/selection.js";
 import { registerServices } from "./src/server/services.js";
@@ -181,6 +182,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   });
 
   registerRpc(bb, readyHub);
+  registerProviderEnv(bb);
   registerCli(bb, { store, connections, hub: readyHub });
   registerServices(bb, { store, connections, hub: readyHub, log });
 

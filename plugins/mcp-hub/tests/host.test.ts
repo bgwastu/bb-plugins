@@ -3,13 +3,18 @@
 // `agents.configure`'s fail-closed selection.
 //
 // This is the test that says "it loads in BB", which the unit tests cannot.
-import { createFakePluginHost, makePluginAgentConfigurationContext } from "@get-bb/plugin-sdk/testing";
+import {
+  createFakePluginHost,
+  makePluginAgentConfigurationContext,
+  makeThreadResponse,
+} from "@get-bb/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import plugin from "../server.js";
 import { fixture } from "./helpers.js";
 
 const hosts: ReturnType<typeof createFakePluginHost>[] = [];
 const metadata: Record<string, Record<string, unknown>> = {};
+const status: Record<string, "idle" | "active"> = {};
 
 async function loaded() {
   const host = createFakePluginHost({
@@ -24,14 +29,16 @@ async function loaded() {
           metadata[args.threadId] = { ...(metadata[args.threadId] ?? {}), ...(args.set ?? {}) };
           return metadata[args.threadId] as Record<string, never>;
         },
+        // A thread starts idle; a test that wants a busy one sets it.
         get: async ({ threadId }: { threadId: string }) =>
-          ({ id: threadId, status: "idle" }) as never,
+          makeThreadResponse({ id: threadId, status: status[threadId] ?? "idle" }) as never,
         stop: async () => ({}) as never,
       },
     },
   });
   hosts.push(host);
   for (const key of Object.keys(metadata)) delete metadata[key];
+  for (const key of Object.keys(status)) delete status[key];
   await plugin(host.bb);
   return host;
 }
@@ -52,6 +59,10 @@ const echoServer = {
   connect: true,
 };
 
+function providerEnvContext() {
+  return { threadId: "thread-1", projectId: "proj_1", hostId: "host-1" };
+}
+
 describe("the plugin on the fake host", () => {
   it("registers every surface the host validates", async () => {
     const host = await loaded();
@@ -63,6 +74,31 @@ describe("the plugin on the fake host", () => {
     expect(registrations.services.map((service) => service.name)).toEqual(["connections"]);
     expect(registrations.schedules.map((schedule) => schedule.name)).toEqual(["catalog-refresh"]);
     expect(registrations.agentConfigurationProvider).not.toBeNull();
+    expect(registrations.settingsDescriptors).toHaveProperty("disableClaudeConnectors");
+    expect(registrations.settingsDescriptors.disableClaudeConnectors).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
+    // Nothing is turned off in another provider until the user asks for it.
+    expect(await host.harness.behavior.resolveProviderEnv("claude-code", providerEnvContext())).toEqual([]);
+  });
+
+  it("turns claude.ai connectors off only when the setting says so", async () => {
+    const host = await loaded();
+    const context = providerEnvContext();
+
+    await host.harness.behavior.setSettings({ disableClaudeConnectors: true });
+    const entries = await host.harness.behavior.resolveProviderEnv("claude-code", context);
+    expect(entries).toEqual([
+      expect.objectContaining({ name: "ENABLE_CLAUDEAI_MCP_SERVERS", value: "0" }),
+    ]);
+    expect(await host.harness.behavior.resolveProviderEnvHealth("claude-code", context)).toMatchObject({
+      label: "MCP via plugin",
+    });
+
+    await host.harness.behavior.setSettings({ disableClaudeConnectors: false });
+    expect(await host.harness.behavior.resolveProviderEnv("claude-code", context)).toEqual([]);
+    expect(await host.harness.behavior.resolveProviderEnvHealth("claude-code", context)).toBeNull();
   });
 
   it("adds a server over RPC, registers its tool, and selects it for a thread", async () => {
@@ -143,6 +179,33 @@ describe("the plugin on the fake host", () => {
       set: { tools: Record<string, boolean> };
     };
     expect(metadata.set.tools).toEqual({ echo_echo: false });
+  }, 20_000);
+
+  it("waits for a busy thread's turn to end before restarting it", async () => {
+    const host = await loaded();
+    await host.harness.behavior.callRpc("server_create", echoServer);
+    status["thread-busy"] = "active";
+
+    const saved = (await host.harness.behavior.callRpc("selection_set", {
+      threadId: "thread-busy",
+      servers: {},
+      tools: { echo_echo: false },
+      clearedServers: [],
+      clearedTools: [],
+      apply: true,
+      interrupt: false,
+    })) as { restarted: boolean; deferred: boolean };
+    expect(saved).toEqual({ restarted: false, deferred: true, truncated: false, offered: 0 });
+    expect(host.harness.inspection.sdk.callsTo("threads.stop")).toEqual([]);
+
+    status["thread-busy"] = "idle";
+    await host.harness.behavior.emitThreadEvent("thread.idle", {
+      thread: makeThreadResponse({ id: "thread-busy", status: "idle" }),
+      lastAssistantText: null,
+    });
+    await expect
+      .poll(() => host.harness.inspection.sdk.callsTo("threads.stop"))
+      .toEqual([[{ threadId: "thread-busy" }]]);
   }, 20_000);
 
   it("keeps a tool this thread switched off out of the session, and refused", async () => {
