@@ -94,35 +94,6 @@ export const snapshotSchema = z.object({
 });
 export type Snapshot = z.infer<typeof snapshotSchema>;
 
-/** One server in the footer popup, with the state this thread would get. */
-export const selectionServerSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  enabled: z.boolean(),
-  /** Why it is off regardless of the switch, when it is. */
-  unavailable: z.string().nullable(),
-  tools: z.array(
-    z.object({
-      name: z.string(),
-      label: z.string(),
-      enabled: z.boolean(),
-      readOnly: z.boolean(),
-    }),
-  ),
-});
-export type SelectionServer = z.infer<typeof selectionServerSchema>;
-
-export const selectionSchema = z.object({
-  servers: z.array(selectionServerSchema),
-  offered: z.number(),
-  truncated: z.boolean(),
-  /** True when the selection was read from a project, not a thread. */
-  scope: z.enum(["thread", "project", "new-thread"]),
-});
-export type Selection = z.infer<typeof selectionSchema>;
-
-const booleanRecord = z.record(z.string(), z.boolean());
-
 export const serverInputSchema = z.object({
   /** Absent when adding. */
   id: z.string().optional(),
@@ -200,16 +171,6 @@ export const contract = defineRpcContract({
     output: empty,
   },
 
-  server_sync: {
-    input: z.object({ id: z.string() }),
-    output: z.object({ tools: z.number(), added: z.array(z.string()), changed: z.boolean() }),
-  },
-
-  server_sync_all: {
-    input: empty,
-    output: z.object({ servers: z.number(), tools: z.number(), failed: z.number() }),
-  },
-
   server_connect: {
     input: z.object({ id: z.string(), origin: z.string().optional() }),
     output: z.object({
@@ -218,11 +179,6 @@ export const contract = defineRpcContract({
       tools: z.number(),
       error: z.string().nullable(),
     }),
-  },
-
-  server_disconnect: {
-    input: z.object({ id: z.string() }),
-    output: empty,
   },
 
   /** Which server a callback's `state` belongs to, so the code is not offered
@@ -254,29 +210,14 @@ export const contract = defineRpcContract({
     output: z.object({ calls: z.array(callSchema) }),
   },
 
-  selection_get: {
-    input: z.object({ threadId: z.string().optional(), projectId: z.string().optional() }),
-    output: selectionSchema,
-  },
-
   /**
-   * Saves the footer popup's switches. `apply` restarts the thread's session
-   * so the next message has the new tool set; `interrupt` does it now even
-   * mid-turn, instead of waiting for the turn to end.
+   * Stops the thread so its next message starts a session with the current
+   * switches. `interrupt` does it now even mid-turn; otherwise the stop waits
+   * for the turn to end.
    */
-  selection_set: {
-    input: z.object({
-      threadId: z.string().optional(),
-      projectId: z.string().optional(),
-      servers: booleanRecord,
-      tools: booleanRecord,
-      /** Overrides to drop, so a thread follows the global switch again. */
-      clearedServers: z.array(z.string()),
-      clearedTools: z.array(z.string()),
-      apply: z.boolean(),
-      interrupt: z.boolean(),
-    }),
-    output: z.object({ restarted: z.boolean(), deferred: z.boolean(), truncated: z.boolean(), offered: z.number() }),
+  restart_thread: {
+    input: z.object({ threadId: z.string(), interrupt: z.boolean() }),
+    output: z.object({ restarted: z.boolean(), deferred: z.boolean() }),
   },
 });
 

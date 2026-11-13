@@ -11,18 +11,13 @@ interface RegisteredTool {
   execute: (params: unknown, ctx: { threadId: string }) => Promise<unknown>;
 }
 
-function fakeBb(metadata: Record<string, Record<string, unknown>> = {}) {
+function fakeBb() {
   const tools = new Map<string, RegisteredTool>();
   const bb = {
     agents: {
       registerTool: (tool: RegisteredTool) => {
         if (tools.has(tool.name)) throw new Error(`${tool.name} is already registered`);
         tools.set(tool.name, tool);
-      },
-    },
-    sdk: {
-      threads: {
-        getPluginMetadata: async ({ threadId }: { threadId: string }) => metadata[threadId] ?? {},
       },
     },
   } as unknown as BbPluginApi;
@@ -108,7 +103,6 @@ describe("tool surfaces", () => {
           throw new Error("that name belongs to another plugin");
         },
       },
-      sdk: { threads: { getPluginMetadata: async () => ({}) } },
     } as unknown as BbPluginApi;
     const surfaces = createToolSurfaces(bb, {
       store,
@@ -135,43 +129,60 @@ describe("tool surfaces", () => {
     );
   });
 
-  it("refuses a tool this thread switched off, without calling the server", async () => {
+  it("refuses a tool whose server was switched off after it was registered", async () => {
     const { store } = memoryStore();
     store.saveServer(serverRecord());
     store.syncTools("echo", [discovered()], 1);
-    const { bb, tools } = fakeBb({ t1: { tools: { echo_echo: false } } });
+    const { bb, tools } = fakeBb();
     const execute = vi.fn(async () => outcome("hi"));
     const surfaces = createToolSurfaces(bb, { store, execute, log: { warn: () => undefined } });
     surfaces.register();
 
+    store.setServerEnabled("echo", false);
     const result = (await tools.get("echo_echo")!.execute({ text: "hi" }, { threadId: "t1" })) as {
       isError: boolean;
       content: Array<{ text: string }>;
     };
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("turned off for this thread");
+    expect(result.content[0].text).toContain("turned off");
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("follows a thread's switch back on, without waiting for a restart", async () => {
+  it("refuses a tool switched off after it was registered", async () => {
     const { store } = memoryStore();
     store.saveServer(serverRecord());
     store.syncTools("echo", [discovered()], 1);
-    store.setToolsEnabled(["echo_echo"], false);
-    const metadata: Record<string, Record<string, unknown>> = { t1: { tools: { echo_echo: true } } };
-    const { bb, tools } = fakeBb(metadata);
+    const { bb, tools } = fakeBb();
     const execute = vi.fn(async () => outcome("hi"));
     const surfaces = createToolSurfaces(bb, { store, execute, log: { warn: () => undefined } });
     surfaces.register();
 
-    await tools.get("echo_echo")!.execute({ text: "hi" }, { threadId: "t1" });
-    expect(execute).toHaveBeenCalled();
+    store.setToolsEnabled(["echo_echo"], false);
+    const result = (await tools.get("echo_echo")!.execute({ text: "hi" }, { threadId: "t1" })) as {
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+  });
 
-    // A switch flipped afterwards is seen within the cache window, which is
-    // what makes turning a tool off immediate rather than next-session.
-    metadata.t1 = { tools: { echo_echo: false } };
-    surfaces.invalidate("t1");
+  it("allows the call again once the switch comes back on", async () => {
+    const { store } = memoryStore();
+    store.saveServer(serverRecord());
+    store.syncTools("echo", [discovered()], 1);
+    const { bb, tools } = fakeBb();
+    const execute = vi.fn(async () => outcome("hi"));
+    const surfaces = createToolSurfaces(bb, { store, execute, log: { warn: () => undefined } });
+    surfaces.register();
+
+    store.setServerEnabled("echo", false);
     await tools.get("echo_echo")!.execute({ text: "hi" }, { threadId: "t1" });
+    expect(execute).not.toHaveBeenCalled();
+
+    store.setServerEnabled("echo", true);
+    const result = (await tools.get("echo_echo")!.execute({ text: "hi" }, { threadId: "t1" })) as {
+      isError?: boolean;
+    };
+    expect(result.isError).toBe(false);
     expect(execute).toHaveBeenCalledTimes(1);
   });
 });

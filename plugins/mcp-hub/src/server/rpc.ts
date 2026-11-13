@@ -17,11 +17,7 @@ export function registerRpc(bb: BbPluginApi, hub: Hub): void {
       return {};
     },
 
-    server_sync: (input) => hub.syncById(input.id),
-
-    server_sync_all: () => hub.syncAll(),
     server_connect: (input) => hub.connect(input.id, input.origin),
-    server_disconnect: (input) => hub.disconnect(input.id).then(() => ({})),
     oauth_resolve: (input) => ({ id: hub.resolveOAuthState(input.state) }),
     oauth_complete: (input) => hub.completeOAuth(input.id, input.code, input.origin),
 
@@ -42,7 +38,6 @@ export function registerRpc(bb: BbPluginApi, hub: Hub): void {
 
     calls: (input) => ({ calls: hub.calls(input.serverId, input.limit) }),
 
-    selection_get: (input) => hub.selection(input.threadId, input.projectId),
-    selection_set: (input) => hub.saveSelection(input),
+    restart_thread: (input) => hub.restartThread(input.threadId, input.interrupt),
   });
 }

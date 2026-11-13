@@ -8,7 +8,6 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { ServerRecord, Store, ToolRecord } from "../storage/store.js";
 import type { ExecuteOutcome } from "../mcp/execute.js";
 import { normaliseSchema, recursiveLocalRef } from "../mcp/validate.js";
-import { readOverrides, toolEnabled } from "./selection.js";
 
 export interface ToolProblem {
   name: string;
@@ -22,7 +21,6 @@ export interface ToolSurfacesDeps {
     tool: ToolRecord;
     arguments: unknown;
     threadId?: string;
-    origin?: string;
   }): Promise<ExecuteOutcome>;
   log: { warn(message: string): void };
 }
@@ -36,45 +34,32 @@ export interface ToolSurfaces {
   problems(): ToolProblem[];
   /** Why one tool was refused, or null. */
   problem(name: string): string | null;
-  /** Forgets a thread's cached overrides, after they were written. */
-  invalidate(threadId: string): void;
-  /** Whether this thread may call this tool right now. */
-  allowed(threadId: string, server: ServerRecord, tool: ToolRecord): Promise<boolean>;
 }
-
-const OVERRIDE_TTL_MS = 2000;
 
 export function createToolSurfaces(bb: BbPluginApi, deps: ToolSurfacesDeps): ToolSurfaces {
   const registered = new Set<string>();
   const refused = new Map<string, string>();
-  const threadOverrides = new Map<string, { at: number; servers: Record<string, boolean>; tools: Record<string, boolean> }>();
-
-  async function overridesFor(threadId: string) {
-    const cached = threadOverrides.get(threadId);
-    const now = Date.now();
-    if (cached && now - cached.at < OVERRIDE_TTL_MS) return cached;
-    let metadata: Record<string, unknown> = {};
-    try {
-      metadata = (await bb.sdk.threads.getPluginMetadata({ threadId })) as Record<string, unknown>;
-    } catch {
-      // A thread that no longer exists has no overrides; the call will fail
-      // for its own reason, not this one.
-    }
-    const overrides = { at: now, ...readOverrides(metadata) };
-    threadOverrides.set(threadId, overrides);
-    return overrides;
-  }
-
-  async function allowed(threadId: string, server: ServerRecord, tool: ToolRecord): Promise<boolean> {
-    const overrides = await overridesFor(threadId);
-    return toolEnabled(tool, server, overrides);
-  }
 
   function descriptionFor(server: ServerRecord, tool: ToolRecord): string {
     const body = tool.description.trim();
     const title = tool.title?.trim();
     const heading = body.length > 0 ? body : (title && title.length > 0 ? title : `${tool.upstreamName} (no description)`);
     return `${heading}\n\nFrom the MCP server "${server.name}".`;
+  }
+
+  /**
+   * The live row for a registered name.
+   *
+   * Read per call, not captured at registration: switching a server or a tool
+   * off must take effect immediately, and a registration lives as long as the
+   * plugin does.
+   */
+  function current(serverId: string, name: string): { server: ServerRecord; tool: ToolRecord } | null {
+    const server = deps.store.getServer(serverId);
+    if (!server) return null;
+    const tool = deps.store.listTools(serverId).find((candidate) => candidate.name === name);
+    if (!tool) return null;
+    return { server, tool };
   }
 
   function register(): string[] {
@@ -90,45 +75,62 @@ export function createToolSurfaces(bb: BbPluginApi, deps: ToolSurfacesDeps): Too
           );
           continue;
         }
+        const serverId = server.id;
+        const name = tool.name;
         try {
           bb.agents.registerTool({
-            name: tool.name,
+            name,
             description: descriptionFor(server, tool),
             parameters: normaliseSchema(tool.inputSchema),
             execute: async (params: unknown, ctx: { threadId: string }) => {
-              // Turned off from the footer after this session started: the
-              // tool is still in the session, so the refusal has to happen
-              // here rather than by the name disappearing.
-              if (!(await allowed(ctx.threadId, server, tool))) {
+              const live = current(serverId, name);
+              if (!live) {
+                return {
+                  content: [{ type: "text" as const, text: `"${name}" is no longer available.` }],
+                  isError: true,
+                };
+              }
+              if (!live.server.enabled) {
                 return {
                   content: [
                     {
                       type: "text" as const,
-                      text: `"${tool.name}" is turned off for this thread. Turn it back on in the MCP button next to the message box.`,
+                      text: `The MCP server "${live.server.name}" is turned off, so "${name}" was not called.`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+              if (!live.tool.enabled) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `"${name}" is turned off in the MCP settings, so it was not called.`,
                     },
                   ],
                   isError: true,
                 };
               }
               const outcome = await deps.execute({
-                server,
-                tool,
+                server: live.server,
+                tool: live.tool,
                 arguments: params,
                 threadId: ctx.threadId,
               });
               return { content: outcome.result.content, isError: outcome.result.isError };
             },
           });
-          registered.add(tool.name);
-          refused.delete(tool.name);
-          added.push(tool.name);
+          registered.add(name);
+          refused.delete(name);
+          added.push(name);
         } catch (error) {
           // BB refuses a duplicate name, a recursive schema, or a name another
           // plugin already holds. None of those is worth failing the plugin
           // load over; the panel says which tool was lost and why.
           const reason = error instanceof Error ? error.message : String(error);
-          refused.set(tool.name, reason);
-          deps.log.warn(`MCP Hub could not register "${tool.name}": ${reason}`);
+          refused.set(name, reason);
+          deps.log.warn(`MCP Hub could not register "${name}": ${reason}`);
         }
       }
     }
@@ -140,9 +142,5 @@ export function createToolSurfaces(bb: BbPluginApi, deps: ToolSurfacesDeps): Too
     names: () => registered,
     problems: () => [...refused.entries()].map(([name, reason]) => ({ name, reason })),
     problem: (name) => refused.get(name) ?? null,
-    invalidate: (threadId) => {
-      threadOverrides.delete(threadId);
-    },
-    allowed,
   };
 }

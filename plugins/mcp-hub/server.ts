@@ -17,13 +17,7 @@ import { MCP_MIGRATIONS } from "./src/storage/schema.js";
 import { createSecretStore, secretsPathFor } from "./src/storage/secrets.js";
 import { createStore } from "./src/storage/store.js";
 import { registerCli } from "./src/server/cli.js";
-import {
-  createHub,
-  createRestarter,
-  loadProjectSelections,
-  type Hub,
-  type Restarter,
-} from "./src/server/hub.js";
+import { createHub, createRestarter, type Hub, type Restarter } from "./src/server/hub.js";
 import { quietLogger } from "./src/server/log.js";
 import { registerProviderEnv } from "./src/server/provider-env.js";
 import { registerRpc } from "./src/server/rpc.js";
@@ -106,13 +100,11 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   });
 
   const restarter: Restarter = createRestarter(bb);
-  const projects = await loadProjectSelections(bb);
 
   hub = createHub(bb, {
     store,
     secrets,
     connections,
-    projects,
     restarter,
     registered: () => surfaces.names(),
     registerTools: () => surfaces.register(),
@@ -135,14 +127,9 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   const registeredNow = surfaces.register();
   if (registeredNow.length > 0) log.info(`Registered ${registeredNow.length} MCP tool(s).`);
 
-  bb.agents.configure((ctx) => {
+  bb.agents.configure(() => {
     try {
-      const overrides = readyHub.overridesFor(ctx.thread.id, ctx.project.id, ctx.pluginMetadata);
-      const selection = resolveSelection(
-        store,
-        { servers: overrides.servers, tools: overrides.tools },
-        surfaces.names(),
-      );
+      const selection = resolveSelection(store, surfaces.names());
 
       const notes: string[] = [];
       if (selection.truncated) {

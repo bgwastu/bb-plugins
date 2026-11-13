@@ -1,6 +1,6 @@
 // One server, opened: what it is, whether it works, every tool with a switch,
 // and the calls it has answered. This is where the density lives, because it
-// is opened deliberately - the list itself stays one line per server.
+// is opened deliberately - the list itself is one line per server.
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,8 +15,7 @@ import type { CallView, ServerView, ToolProblem, ToolView } from "../../contract
 import { errorText } from "./data.js";
 import { useApi } from "./rpc.js";
 
-function timeAgo(at: number | null): string {
-  if (at === null) return "never";
+function timeAgo(at: number): string {
   const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.round(seconds / 60);
@@ -37,7 +36,7 @@ export function ServerDetail(props: {
 }) {
   const rpc = useApi();
   const [calls, setCalls] = useState<CallView[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -47,8 +46,7 @@ export function ServerDetail(props: {
   const loadCalls = useCallback(async () => {
     if (!serverId) return;
     try {
-      const result = await rpc.calls({ serverId, limit: 20 });
-      setCalls(result.calls);
+      setCalls((await rpc.calls({ serverId, limit: 20 })).calls);
     } catch {
       setCalls([]);
     }
@@ -60,8 +58,8 @@ export function ServerDetail(props: {
 
   if (!server) return null;
 
-  async function act(name: string, run: () => Promise<unknown>): Promise<void> {
-    setBusy(name);
+  async function act(run: () => Promise<unknown>): Promise<void> {
+    setBusy(true);
     setError(null);
     try {
       await run();
@@ -70,7 +68,7 @@ export function ServerDetail(props: {
     } catch (caught) {
       setError(errorText(caught));
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
@@ -104,19 +102,17 @@ export function ServerDetail(props: {
             <Button
               size="sm"
               variant="outline"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() =>
-                void act("connect", () =>
-                  rpc.serverConnect({ id: server.id, origin: window.location.origin }),
-                )
+                void act(() => rpc.serverConnect({ id: server.id, origin: window.location.origin }))
               }
             >
-              {busy === "connect" ? "Connecting…" : server.state === "ready" ? "Reconnect" : "Connect"}
+              {server.state === "ready" ? "Reconnect" : "Connect"}
             </Button>
             <Button
               size="sm"
               variant="outline"
-              disabled={busy !== null || tools.length === 0}
+              disabled={busy || tools.length === 0}
               onClick={() => props.onTest(null)}
             >
               Test
@@ -126,22 +122,12 @@ export function ServerDetail(props: {
             </Button>
             <Button
               size="sm"
-              variant="outline"
-              disabled={busy !== null}
-              onClick={() =>
-                void act("enabled", () => rpc.serverEnabled({ id: server.id, enabled: !server.enabled }))
-              }
-            >
-              {server.enabled ? "Turn off" : "Turn on"}
-            </Button>
-            <Button
-              size="sm"
               variant="ghost"
               className="text-destructive hover:text-destructive"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() => {
                 if (!window.confirm(`Remove "${server.name}"? Its tools disappear from every thread.`)) return;
-                void act("remove", async () => {
+                void act(async () => {
                   await rpc.serverRemove({ id: server.id });
                   props.onClose();
                 });
@@ -167,27 +153,22 @@ export function ServerDetail(props: {
             </div>
           ) : null}
 
-          {!server.enabled ? (
-            <p className="text-xs text-muted-foreground">
-              Turned off: none of its tools reach any thread.
-            </p>
-          ) : null}
-
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-            <span>{server.auth === "oauth" ? "OAuth" : server.auth === "bearer" ? "Bearer token" : server.auth === "headers" ? "Custom headers" : "No authentication"}</span>
-            <span>{tools.length} tools</span>
-            <span>last seen {timeAgo(server.lastSeenAt)}</span>
-            {server.protocol ? <span>{server.protocol.toUpperCase()}</span> : null}
-          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {server.auth === "oauth"
+              ? "OAuth"
+              : server.auth === "bearer"
+                ? "Bearer token"
+                : server.auth === "headers"
+                  ? "Custom headers"
+                  : "No authentication"}
+            {server.lastSeenAt ? `, last seen ${timeAgo(server.lastSeenAt)}` : ""}
+          </p>
 
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
 
           <div className="space-y-1">
-            <p className="text-xs font-medium text-muted-foreground">Tools</p>
             {tools.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                No tools yet. Press Connect to read them from the server.
-              </p>
+              <p className="text-xs text-muted-foreground">No tools yet. Press Connect.</p>
             ) : null}
             {tools.map((tool) => {
               const problem = props.problems.find((entry) => entry.name === tool.name)?.reason ?? tool.problem;
@@ -198,11 +179,9 @@ export function ServerDetail(props: {
                       checked={tool.enabled}
                       disabled={problem !== null}
                       onCheckedChange={(checked) =>
-                        void act(`tool-${tool.name}`, () =>
-                          rpc.toolEnabled({ names: [tool.name], enabled: checked }),
-                        )
+                        void act(() => rpc.toolEnabled({ names: [tool.name], enabled: checked }))
                       }
-                      title={tool.enabled ? "On in every thread" : "Off in every thread"}
+                      aria-label={`${tool.upstreamName} on`}
                     />
                     <button
                       type="button"
@@ -215,7 +194,7 @@ export function ServerDetail(props: {
                       </span>
                     </button>
                     {tool.missing ? (
-                      <span className="shrink-0 text-[10px] text-amber-600">gone from server</span>
+                      <span className="shrink-0 text-[10px] text-amber-600">gone</span>
                     ) : null}
                     <Button
                       size="sm"
@@ -231,14 +210,8 @@ export function ServerDetail(props: {
                       <p className="whitespace-pre-wrap text-[11px] text-muted-foreground">
                         {tool.description || "No description."}
                       </p>
-                      <p className="font-mono text-[10px] text-muted-foreground">
-                        registered as {tool.name}
-                        {tool.readOnly ? " · read-only" : ""}
-                      </p>
                       {problem ? (
-                        <p className="text-[11px] text-amber-600">
-                          Not offered to agents: {problem}
-                        </p>
+                        <p className="text-[11px] text-amber-600">Not offered to agents: {problem}</p>
                       ) : null}
                     </div>
                   ) : null}
@@ -263,7 +236,7 @@ export function ServerDetail(props: {
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate font-mono">{call.tool}</span>
                       <span className={call.ok ? "text-emerald-600" : "text-destructive"}>
-                        {call.ok ? "ok" : "failed"} · {call.durationMs}ms · {timeAgo(call.at)}
+                        {call.ok ? "ok" : "failed"}, {call.durationMs}ms, {timeAgo(call.at)}
                       </span>
                     </div>
                     {call.error ? <p className="text-muted-foreground">{call.error}</p> : null}

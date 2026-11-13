@@ -22,25 +22,29 @@ still means the same thing later.
 
 ## A tool you cannot find
 
-Each conversation carries the tools that were switched on for it when its
-session started. So a tool the user expects and you do not have is usually one
-of:
+Servers are switched on or off for everyone, and each tool has its own switch.
+Your session carries whatever was on when it started, so a tool the user
+expects and you do not have means one of:
 
-- it is off for this conversation - the user can turn it on from the MCP button
-  next to the message box;
-- it belongs to a server that is off, or that has not been connected yet;
-- the server is waiting for a sign-in.
+- the server is off, or the tool is off, in the MCP settings;
+- the server has not been connected yet;
+- the server is waiting for a sign-in;
+- the switch was turned on after your session started - it arrives after a
+  restart, which the MCP popup offers.
 
 Do not infer that a capability does not exist from a missing tool name. Say
 which server and tool you would need, and that it is off or not connected - the
 fix is in the MCP settings, not a workaround.
 
-## Turning something on takes a restart; turning it off does not
+## A tool that is present but refuses
 
-The user's selection is applied when a session starts. Turning a tool **off**
-takes effect immediately - calling one reports that it is turned off for this
-thread. Turning one **on** reaches you after the session restarts, which the
-Save button in the MCP popup does on its own.
+Switching a server or tool off is immediate, even in a session that already has
+it:
+
+> The MCP server "composio" is turned off, so "composio_..." was not called.
+
+That is not a failure to work around. Tell the user it is switched off and
+where the switch is.
 
 ## When a call fails
 
@@ -73,6 +77,6 @@ reach.
 
 ## Which servers and tools exist right now
 
-`bb mcp-hub` lists them from a shell, with `--tools` for every tool. That shell
-answer is the user's configuration; this conversation's selection can be
-narrower.
+`bb mcp-hub` lists them from a shell, with `--tools` for every tool. That answer
+is the same state the panel shows, so it is not narrower than yours unless your
+session predates a switch.

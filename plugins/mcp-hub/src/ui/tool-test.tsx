@@ -228,7 +228,7 @@ export function ToolTestDialog(props: {
           {result ? (
             <div className="space-y-1 rounded-md border p-3">
               <p className="text-xs text-muted-foreground">
-                {result.isError ? "The tool reported an error" : "Result"} · {result.durationMs} ms
+                {result.isError ? "The tool reported an error" : "Result"}, {result.durationMs} ms
               </p>
               <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
                 {result.content

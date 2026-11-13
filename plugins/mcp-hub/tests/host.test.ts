@@ -69,7 +69,7 @@ describe("the plugin on the fake host", () => {
     const registrations = host.harness.inspection.registrations;
 
     expect(registrations.rpcMethods).toContain("snapshot");
-    expect(registrations.rpcMethods).toContain("selection_set");
+    expect(registrations.rpcMethods).toContain("restart_thread");
     expect(registrations.cli?.name).toBe("mcp-hub");
     expect(registrations.services.map((service) => service.name)).toEqual(["connections"]);
     expect(registrations.schedules.map((schedule) => schedule.name)).toEqual(["catalog-refresh"]);
@@ -114,7 +114,7 @@ describe("the plugin on the fake host", () => {
     expect(toolNames).toContain("echo_echo");
 
     const configuration = await host.harness.behavior.resolveAgentConfiguration(
-      makePluginAgentConfigurationContext({ pluginMetadata: {} }),
+      makePluginAgentConfigurationContext({}),
     );
     // The schema override travels with the selection, so a changed schema
     // reaches the next session without a reload.
@@ -156,46 +156,53 @@ describe("the plugin on the fake host", () => {
     expect(called.stdout).toContain("from cli");
   }, 20_000);
 
-  it("saves a thread selection and restarts that thread", async () => {
+  it("switches a server off for everyone, and out of the selection", async () => {
     const host = await loaded();
     await host.harness.behavior.callRpc("server_create", echoServer);
 
-    const saved = (await host.harness.behavior.callRpc("selection_set", {
-      threadId: "thread-1",
-      servers: {},
-      tools: { echo_echo: false },
-      clearedServers: [],
-      clearedTools: [],
-      apply: true,
-      interrupt: false,
-    })) as { restarted: boolean; deferred: boolean; offered: number };
-    expect(saved).toMatchObject({ restarted: true, deferred: false, offered: 0 });
+    await host.harness.behavior.callRpc("server_enabled", { id: "echo", enabled: false });
 
-    expect(host.harness.inspection.sdk.callsTo("threads.updatePluginMetadata")).toHaveLength(1);
-    expect(host.harness.inspection.sdk.callsTo("threads.stop")).toEqual([[{ threadId: "thread-1" }]]);
-
-    // The stored override is a delta: the tool name maps to false, nothing else.
-    const metadata = host.harness.inspection.sdk.callsTo("threads.updatePluginMetadata")[0][0] as {
-      set: { tools: Record<string, boolean> };
+    const snapshot = (await host.harness.behavior.callRpc("snapshot", {})) as {
+      servers: Array<{ id: string; enabled: boolean }>;
+      offered: number;
     };
-    expect(metadata.set.tools).toEqual({ echo_echo: false });
+    expect(snapshot.servers[0]).toMatchObject({ id: "echo", enabled: false });
+    expect(snapshot.offered).toBe(0);
+
+    const configuration = await host.harness.behavior.resolveAgentConfiguration(
+      makePluginAgentConfigurationContext({}),
+    );
+    expect(configuration.tools).toEqual([]);
+
+    // The tool is still registered; a call reports the switch rather than
+    // silently reaching the server.
+    const refused = (await host.harness.behavior.callAgentTool("echo_echo", { text: "hi" })) as {
+      isError: boolean;
+      content: Array<{ text: string }>;
+    };
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain("turned off");
+  }, 20_000);
+
+  it("restarts a thread on request", async () => {
+    const host = await loaded();
+    const result = (await host.harness.behavior.callRpc("restart_thread", {
+      threadId: "thread-1",
+      interrupt: false,
+    })) as { restarted: boolean; deferred: boolean };
+    expect(result).toEqual({ restarted: true, deferred: false });
+    expect(host.harness.inspection.sdk.callsTo("threads.stop")).toEqual([[{ threadId: "thread-1" }]]);
   }, 20_000);
 
   it("waits for a busy thread's turn to end before restarting it", async () => {
     const host = await loaded();
-    await host.harness.behavior.callRpc("server_create", echoServer);
     status["thread-busy"] = "active";
 
-    const saved = (await host.harness.behavior.callRpc("selection_set", {
+    const saved = (await host.harness.behavior.callRpc("restart_thread", {
       threadId: "thread-busy",
-      servers: {},
-      tools: { echo_echo: false },
-      clearedServers: [],
-      clearedTools: [],
-      apply: true,
       interrupt: false,
     })) as { restarted: boolean; deferred: boolean };
-    expect(saved).toEqual({ restarted: false, deferred: true, truncated: false, offered: 0 });
+    expect(saved).toEqual({ restarted: false, deferred: true });
     expect(host.harness.inspection.sdk.callsTo("threads.stop")).toEqual([]);
 
     status["thread-busy"] = "idle";
@@ -206,28 +213,6 @@ describe("the plugin on the fake host", () => {
     await expect
       .poll(() => host.harness.inspection.sdk.callsTo("threads.stop"))
       .toEqual([[{ threadId: "thread-busy" }]]);
-  }, 20_000);
-
-  it("keeps a tool this thread switched off out of the session, and refused", async () => {
-    const host = await loaded();
-    await host.harness.behavior.callRpc("server_create", echoServer);
-
-    const configuration = await host.harness.behavior.resolveAgentConfiguration(
-      makePluginAgentConfigurationContext({ pluginMetadata: { tools: { echo_echo: false } } }),
-    );
-    expect(configuration.tools).toEqual([]);
-    expect(configuration.instructions).toBeNull();
-
-    // A session that still has the tool from before the switch gets a refusal,
-    // not a silent call.
-    const refused = (await host.harness.behavior.callAgentTool(
-      "echo_echo",
-      { text: "hello" },
-      { threadId: "thread-off" },
-    )) as { isError: boolean; content: Array<{ text: string }> };
-    expect(refused.isError).toBe(false);
-    // Without metadata for that thread, the global switch still allows it.
-    expect(refused.content[0]).toMatchObject({ type: "text", text: "hello" });
   }, 20_000);
 
   it("reports a failed connection on the row instead of failing the call", async () => {

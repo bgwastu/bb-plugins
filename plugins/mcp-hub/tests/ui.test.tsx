@@ -3,7 +3,7 @@
 // its nav registration and the footer button and popup through a composer
 // scope. The host runtime validates the registrations on load.
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CapturedPluginApp } from "@get-bb/plugin-sdk/testing/app";
 
@@ -15,6 +15,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   cleanup();
+  vi.clearAllMocks();
 });
 
 const server = {
@@ -30,7 +31,7 @@ const server = {
   oauthScopes: null,
   enabled: true,
   createdAt: 1,
-  lastSeenAt: Date.now() - 5000,
+  lastSeenAt: null,
   hasBearer: false,
   hasHeaders: false,
   hasEnv: false,
@@ -57,124 +58,124 @@ const tool = {
   problem: null,
 };
 
-const snapshot = {
-  servers: [server],
-  tools: [tool],
-  problems: [],
-  offered: 1,
-  truncated: false,
-};
-
-const selection = {
-  servers: [
-    {
-      id: "echo",
-      name: "Echo",
-      enabled: true,
-      unavailable: null,
-      tools: [{ name: "echo_echo", label: "echo", enabled: true, readOnly: false }],
-    },
-  ],
-  offered: 1,
-  truncated: false,
-  scope: "thread" as const,
-};
-
-const rpc = {
-  snapshot: vi.fn(async () => snapshot),
-  selection_get: vi.fn(async () => selection),
-  selection_set: vi.fn(async () => ({ restarted: true, deferred: false, truncated: false, offered: 0 })),
-  calls: vi.fn(async () => ({ calls: [] })),
-};
+function rpcStubs(overrides: { enabled?: boolean } = {}) {
+  return {
+    snapshot: vi.fn(async () => ({
+      servers: [{ ...server, enabled: overrides.enabled ?? true }],
+      tools: [tool],
+      problems: [],
+      offered: 1,
+      truncated: false,
+    })),
+    calls: vi.fn(async () => ({ calls: [] })),
+    server_enabled: vi.fn(async () => ({})),
+    restart_thread: vi.fn(async () => ({ restarted: true, deferred: false })),
+  };
+}
 
 describe("the management panel", () => {
-  it("lists a server with its state, target and tool count", async () => {
+  it("is one row with a switch, and no dashboard", async () => {
+    const rpc = rpcStubs();
     renderSlot(app.navPanels[0]!, { subPath: "" }, { rpc, pluginId: "mcp-hub" });
+
     expect(await screen.findByText("Echo")).toBeDefined();
     expect(screen.getByText("node server.mjs")).toBeDefined();
-    expect(screen.getByText("Connected")).toBeDefined();
-    expect(screen.getByText(/1 tool · /)).toBeDefined();
+    expect(screen.getByText("MCP servers")).toBeDefined();
+
+    // The old header counted servers and tools; the row carried state, tool
+    // count and last-seen. None of that is here any more.
+    expect(screen.queryByText(/configured/)).toBeNull();
+    expect(screen.queryByText(/offered to agents/)).toBeNull();
+    expect(screen.queryByText(/never/)).toBeNull();
+    expect(screen.queryByText(/Refresh all/)).toBeNull();
+    expect(screen.queryByText(/^Connected$|^Not connected$/)).toBeNull();
+
+    // One switch on the row, and it flips the global answer.
+    const toggle = screen.getByRole("switch", { name: "Echo on" });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(rpc.server_enabled).toHaveBeenCalledWith({ id: "echo", enabled: false }));
   });
 
-  it("opens a server's drawer with its tools and its own switch", async () => {
+  it("opens a server's drawer with its tools", async () => {
+    const rpc = rpcStubs();
     renderSlot(app.navPanels[0]!, { subPath: "" }, { rpc, pluginId: "mcp-hub" });
+
     fireEvent.click(await screen.findByText("Echo"));
-    expect(await screen.findByText("Tools")).toBeDefined();
-    fireEvent.click(screen.getByText("echo"));
-    expect(await screen.findByText(/registered as echo_echo/)).toBeDefined();
+    expect(await screen.findByText("Recent calls")).toBeDefined();
+    expect(screen.getByText("echo")).toBeDefined();
+    // The drawer does not repeat the switch or claim a last-seen that never
+    // happened.
+    expect(screen.queryByText(/last seen/)).toBeNull();
   });
 
-  it("opens the add form and offers both kinds of server", async () => {
+  it("opens the add form", async () => {
+    const rpc = rpcStubs();
     renderSlot(app.navPanels[0]!, { subPath: "" }, { rpc, pluginId: "mcp-hub" });
-    const [headerAdd] = await screen.findAllByText("Add server");
-    fireEvent.click(headerAdd!);
+
+    fireEvent.click(await screen.findByText("Add server"));
     expect(await screen.findByText("Add an MCP server")).toBeDefined();
-    expect(screen.getByText("Remote server")).toBeDefined();
-    expect(screen.getByText("Local command")).toBeDefined();
   });
 });
 
 describe("the composer footer", () => {
   const customization = () => app.composerCustomizations[0]!;
 
-  it("shows how many tools this conversation has", async () => {
-    const action = customization().actions![0]!;
+  it("counts servers, not tools", async () => {
+    const rpc = rpcStubs();
     renderSlot(
-      { component: action.component },
+      { component: customization().actions![0]!.component },
       {},
-      {
-        rpc,
-        pluginId: "mcp-hub",
-        composer: { scope: { kind: "thread", threadId: "thread-1" } },
-      },
+      { rpc, pluginId: "mcp-hub", composer: { scope: { kind: "thread", threadId: "thread-1" } } },
     );
     expect(await screen.findByText("MCP")).toBeDefined();
     expect(await screen.findByText("1")).toBeDefined();
   });
 
-  it("saves only what was switched, as a delta", async () => {
-    const popup = customization().experimental_popups![0]!;
+  it("says off when every server is off", async () => {
+    const rpc = rpcStubs({ enabled: false });
     renderSlot(
-      { component: popup.component },
+      { component: customization().actions![0]!.component },
       {},
-      {
-        rpc,
-        pluginId: "mcp-hub",
-        composer: { scope: { kind: "thread", threadId: "thread-1" } },
-      },
+      { rpc, pluginId: "mcp-hub", composer: { scope: { kind: "thread", threadId: "thread-1" } } },
     );
-
-    // Expand the server, then switch its only tool off.
-    fireEvent.click(await screen.findByText("Echo"));
-    await screen.findByText("echo");
-    const switches = screen.getAllByRole("switch");
-    // The first switch is the server, the second the tool under it.
-    fireEvent.click(switches[1]!);
-
-    fireEvent.click(screen.getByText("Save"));
-    await waitFor(() => expect(rpc.selection_set).toHaveBeenCalled());
-    expect(rpc.selection_set).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "thread-1",
-        tools: { echo_echo: false },
-        clearedTools: [],
-        apply: true,
-      }),
-    );
+    expect(await screen.findByText("MCP")).toBeDefined();
+    expect(await screen.findByText("off")).toBeDefined();
   });
 
-  it("tells a new-thread composer that the choice is for the project", async () => {
-    const popup = customization().experimental_popups![0]!;
+  it("flips the same global switch from the popup", async () => {
+    const rpc = rpcStubs();
     renderSlot(
-      { component: popup.component },
+      { component: customization().experimental_popups![0]!.component },
       {},
-      {
-        rpc,
-        pluginId: "mcp-hub",
-        composer: { scope: { kind: "new-thread", projectId: "proj_1" } },
-      },
+      { rpc, pluginId: "mcp-hub", composer: { scope: { kind: "thread", threadId: "thread-1" } } },
     );
-    expect(await screen.findByText("MCP tools")).toBeDefined();
-    expect(screen.getByText("For new threads in this project")).toBeDefined();
+
+    const toggle = await screen.findByRole("switch");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(rpc.server_enabled).toHaveBeenCalledWith({ id: "echo", enabled: false }));
+
+    // Only after a change does the popup offer to restart the thread, and it
+    // is one link plus one action - no per-thread save.
+    fireEvent.click(await screen.findByText("Restart thread"));
+    await waitFor(() =>
+      expect(rpc.restart_thread).toHaveBeenCalledWith({ threadId: "thread-1", interrupt: false }),
+    );
+    expect(screen.getByText("Manage servers")).toBeDefined();
+    expect(screen.queryByText(/All settings/)).toBeNull();
+    expect(screen.queryByText(/For this conversation/)).toBeNull();
+  });
+
+  it("offers no restart outside a thread", async () => {
+    const rpc = rpcStubs();
+    renderSlot(
+      { component: customization().experimental_popups![0]!.component },
+      {},
+      { rpc, pluginId: "mcp-hub", composer: { scope: { kind: "new-thread", projectId: "proj_1" } } },
+    );
+
+    fireEvent.click(await screen.findByRole("switch"));
+    await waitFor(() => expect(rpc.server_enabled).toHaveBeenCalled());
+    expect(screen.queryByText("Restart thread")).toBeNull();
+    expect(within(document.body).getByText("Manage servers")).toBeDefined();
   });
 });

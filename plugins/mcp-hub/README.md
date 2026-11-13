@@ -10,56 +10,32 @@ in the same shape a native tool returns.
 
 ## Two surfaces
 
-**The management page** (Settings -> MCP) is where a server is added, edited,
-connected and removed. One line per server: name, target, status, tool count,
-last seen. Everything else - the tool switches, a Test dialog that runs a tool
-with a form built from its schema, and the last calls with their errors - is
-one click deeper, in the server's own drawer. No second tab, no dashboard.
+**The management page** (Settings -> MCP) is the list: one row per server with
+its status dot, its target and a switch. Opening a row gives the tools with
+their own switches, a Test dialog that builds a form from the tool's schema,
+the recent calls with their errors, and Connect/Edit/Remove.
 
-**The MCP button in the composer footer** is the everyday surface: which
-servers and tools *this conversation* may use. A switch per server, the tools
-underneath it, a filter, and Save. It is also in the new-thread composer,
-where it edits the project's default selection instead of a thread's.
+**The MCP button in the composer footer** shows how many servers are on and
+opens the same switches, without leaving the conversation. It is the same
+state the page shows, not a copy of it.
 
-## Selections, and why Save restarts the session
+## One switch per server
 
-A provider session is built with its tool list. BB has no way to add, remove or
-update a registered tool inside a live session, so a selection change has to
-reach a session boundary to be real. Save therefore:
-
-1. writes the change into the thread's plugin metadata (only the entries you
-   actually moved - see below),
-2. stops the thread with `bb.sdk.threads.stop`, which releases its loaded
-   runtime but keeps the conversation, and
-3. lets the next message cold-start with the new tools.
-
-A stop mid-turn would interrupt the work, so Save mid-turn says "applies when
-this turn ends" and stops the thread on its `thread.idle` event. **Apply now**
-interrupts instead. Anything the agent left running in that session - a
-background shell, a sub-agent - dies with it, and the popup says so.
-
-Turning a tool **off** needs none of that: the tool stays in the session but
-refuses the call, so off is immediate. Only turning something on waits for a
-restart.
-
-## A default reaches every thread
-
-Two layers, and only two:
-
-- the **global switch** on a server or a tool, on the management page;
-- a **thread's override**, stored in its plugin metadata, or a **project's
-  default**, stored in the plugin's key-value storage for the new-thread
-  composer.
-
-Where a thread has no override it follows the global switch, so a tool added or
-turned on later reaches conversations that never expressed an opinion - which
-is the whole reason the old default-off behaviour felt broken. The footer
-popup stores only what you moved; matching the global switch again removes the
-override rather than pinning it.
+A server is on or off for everyone. There is no per-thread or per-project
+selection to reconcile: the switch in the popup and the switch on the page
+write the same row, and the next session a thread builds uses whatever is on
+then. Within a server, individual tools have the same kind of switch.
 
 New tools arrive **on**. The provider cap is 256 tools per session; past it the
-selection is clamped and both the popup and the panel say how many did not
-fit.
+selection is clamped and the page says so.
+
+Turning something **off** is immediate: the tool stays registered but refuses
+the call, so a session that already has it cannot use it. Turning something
+**on** reaches a session only when that session is built, which is why the
+popup offers **Restart thread** after a change - it stops the thread so the
+next message starts fresh. Mid-turn, that stop waits for the turn to end.
+Anything the agent left running in the session - a background shell, a
+sub-agent - stops with it.
 
 ## Errors are answers, not dead connections
 
@@ -73,8 +49,8 @@ were still calling. Now:
   message, and the connection stays open.
 - **A transport failure drops the client and retries once - reads only.** A
   write that may have landed is reported, never replayed.
-- **A 401 is recorded against the server** and shown in the panel, on the row,
-  in `bb mcp-hub list`, and through `bb plugin list` (`needs-configuration`),
+- **A 401 is recorded against the server** and shown on the row, in
+  `bb mcp-hub list`, and through `bb plugin list` (`needs-configuration`),
   instead of only in a log line.
 
 Results keep everything the server sent: text, images, resources, and
@@ -151,7 +127,7 @@ resurrect the old list. The old tables are left in place as a fallback.
 - `src/mcp/` - `stdio.ts`, `http.ts`, `connection.ts`, `execute.ts`,
   `validate.ts`, `content.ts`, `oauth.ts`, `naming.ts`.
 - `src/server/` - `hub.ts` (the domain layer), `selection.ts`, `tools.ts`,
-  `rpc.ts`, `cli.ts`, `services.ts`, `log.ts`.
+  `rpc.ts`, `cli.ts`, `services.ts`, `provider-env.ts`, `log.ts`.
 - `src/ui/` - `panel.tsx`, `server-form.tsx`, `server-detail.tsx`,
   `tool-test.tsx`, `footer.tsx`, `data.ts`, `rpc.ts`.
 - `contract.ts` - the RPC contract both sides compile against.

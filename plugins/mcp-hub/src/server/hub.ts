@@ -11,42 +11,10 @@ import type { ServerRecord, Store, ToolRecord } from "../storage/store.js";
 import type { ConnectionManager } from "../mcp/connection.js";
 import type { ExecuteOutcome } from "../mcp/execute.js";
 import { executeTool } from "../mcp/execute.js";
-import type { Selection, SelectionServer, ServerInput, ServerView, Snapshot, ToolView } from "../../contract.js";
+import type { ServerInput, ServerView, Snapshot, ToolView } from "../../contract.js";
 import { oauthRedirectUriFor } from "../../contract.js";
-import type { Overrides } from "./selection.js";
-import { readOverrides, resolveSelection, serverEnabled, toolEnabled } from "./selection.js";
+import { resolveSelection } from "./selection.js";
 import { storedRedirectUri } from "../mcp/oauth.js";
-
-export interface ProjectSelections {
-  get(projectId: string): Overrides;
-  set(projectId: string, overrides: Overrides): Promise<void>;
-  all(): Record<string, Overrides>;
-}
-
-/** Project defaults for the new-thread composer, kept in bb's plugin kv. */
-export async function loadProjectSelections(bb: BbPluginApi): Promise<ProjectSelections> {
-  const KEY = "project-selections";
-  let cache: Record<string, Overrides> = {};
-  try {
-    const stored = await bb.storage.kv.get<Record<string, Overrides>>(KEY);
-    if (stored && typeof stored === "object") cache = stored;
-  } catch {
-    // A missing or unreadable key is the same as no defaults yet.
-  }
-  return {
-    get: (projectId) => cache[projectId] ?? { servers: {}, tools: {} },
-    all: () => cache,
-    async set(projectId, overrides) {
-      cache = { ...cache, [projectId]: overrides };
-      try {
-        await bb.storage.kv.set(KEY, cache);
-      } catch {
-        // The in-memory copy is what configure() reads; a failed write is
-        // lost defaults, not a broken session.
-      }
-    },
-  };
-}
 
 export interface Restarter {
   apply(threadId: string, interrupt: boolean): Promise<{ restarted: boolean; deferred: boolean }>;
@@ -92,7 +60,6 @@ export interface HubDeps {
   store: Store;
   secrets: SecretStore;
   connections: ConnectionManager;
-  projects: ProjectSelections;
   restarter: Restarter;
   /** Every name this plugin registered with BB, for selection filtering. */
   registered(): ReadonlySet<string>;
@@ -122,19 +89,8 @@ export interface Hub {
   setToolEnabled(names: string[], enabled: boolean): number;
   runTool(request: { serverId: string; tool: string; arguments: unknown; threadId?: string }): Promise<ExecuteOutcome>;
   calls(serverId: string, limit: number): ReturnType<Store["listCalls"]>;
-  selection(threadId?: string, projectId?: string): Promise<Selection>;
-  saveSelection(input: {
-    threadId?: string;
-    projectId?: string;
-    servers: Record<string, boolean>;
-    tools: Record<string, boolean>;
-    clearedServers?: string[];
-    clearedTools?: string[];
-    apply: boolean;
-    interrupt: boolean;
-  }): Promise<{ restarted: boolean; deferred: boolean; truncated: boolean; offered: number }>;
-  /** Used by `configure`: the overrides a thread's session resolves against. */
-  overridesFor(threadId: string, projectId: string, metadata: Record<string, unknown>): Overrides;
+  /** Stops a thread so its next message builds a session from the current switches. */
+  restartThread(threadId: string, interrupt: boolean): Promise<{ restarted: boolean; deferred: boolean }>;
 }
 
 function cleanArgs(args: string[] | undefined): string[] {
@@ -142,30 +98,7 @@ function cleanArgs(args: string[] | undefined): string[] {
 }
 
 export function createHub(bb: BbPluginApi, deps: HubDeps): Hub {
-  const { store, secrets, connections, projects, restarter } = deps;
-
-  function projectOverrides(projectId: string): Overrides {
-    return projects.get(projectId);
-  }
-
-  function mergeOverrides(base: Overrides, onTop: Overrides): Overrides {
-    return {
-      servers: { ...base.servers, ...onTop.servers },
-      tools: { ...base.tools, ...onTop.tools },
-    };
-  }
-
-  function overridesFor(threadId: string, projectId: string, metadata: Record<string, unknown>): Overrides {
-    return mergeOverrides(projectOverrides(projectId), readOverrides(metadata));
-  }
-
-  async function threadMetadata(threadId: string): Promise<Record<string, unknown>> {
-    try {
-      return (await bb.sdk.threads.getPluginMetadata({ threadId })) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
+  const { store, secrets, connections, restarter } = deps;
 
   function secretFlags(id: string): {
     hasBearer: boolean;
@@ -226,7 +159,7 @@ export function createHub(bb: BbPluginApi, deps: HubDeps): Hub {
   }
 
   function snapshot(origin?: string): Snapshot {
-    const selection = resolveSelection(store, {}, deps.registered());
+    const selection = resolveSelection(store, deps.registered());
     return {
       servers: store.listServers().map((server) => serverView(server, origin)),
       tools: store.listTools().map(toolView),
@@ -309,39 +242,6 @@ export function createHub(bb: BbPluginApi, deps: HubDeps): Hub {
         error: error instanceof Error ? error.message : String(error),
       };
     }
-  }
-
-  async function selectionView(threadId?: string, projectId?: string): Promise<Selection> {
-    const scope: Selection["scope"] = threadId ? "thread" : projectId ? "new-thread" : "project";
-    const scopeProject = projectId ?? (threadId ? await projectIdFor(threadId) : "");
-    const overrides = threadId
-      ? mergeOverrides(projectOverrides(scopeProject), readOverrides(await threadMetadata(threadId)))
-      : projectOverrides(scopeProject);
-    const registered = deps.registered();
-    let offered = 0;
-    const servers: SelectionServer[] = store.listServers().map((server) => {
-      // A server switched off in the management page is not a thread
-      // decision; the footer says so instead of offering a switch that would
-      // do nothing.
-      const unavailable = server.enabled ? null : "Turned off in the MCP settings";
-      const enabled = unavailable === null && serverEnabled(server, overrides);
-      const tools = store
-        .listTools(server.id)
-        .filter((tool) => !tool.missing && registered.has(tool.name))
-        .map((tool) => {
-          const toolOn = enabled && toolEnabled(tool, server, overrides);
-          if (toolOn) offered += 1;
-          return {
-            name: tool.name,
-            label: tool.title ?? tool.upstreamName,
-            enabled: toolOn,
-            readOnly: tool.readOnly,
-          };
-        });
-      return { id: server.id, name: server.name, enabled, unavailable, tools };
-    });
-
-    return { servers, offered, truncated: offered > 256, scope };
   }
 
   return {
@@ -509,65 +409,8 @@ export function createHub(bb: BbPluginApi, deps: HubDeps): Hub {
       return store.listCalls(serverId, limit);
     },
 
-    async selection(threadId, projectId) {
-      return selectionView(threadId, projectId);
+    async restartThread(threadId, interrupt) {
+      return restarter.apply(threadId, interrupt);
     },
-
-    async saveSelection(input) {
-      const merged = (current: Overrides): Overrides => {
-        const servers: Record<string, boolean> = { ...current.servers, ...input.servers };
-        const tools: Record<string, boolean> = { ...current.tools, ...input.tools };
-        for (const id of input.clearedServers ?? []) delete servers[id];
-        for (const name of input.clearedTools ?? []) delete tools[name];
-        return { servers, tools };
-      };
-      if (input.threadId) {
-        const next = merged(readOverrides(await threadMetadata(input.threadId)));
-        await bb.sdk.threads.updatePluginMetadata({
-          threadId: input.threadId,
-          set: { servers: next.servers, tools: next.tools },
-        });
-      } else {
-        const projectId = input.projectId ?? "";
-        await projects.set(projectId, merged(projectOverrides(projectId)));
-      }
-
-      // The counts come from the overrides that were just written, not from a
-      // re-read: the caller is waiting on this call, and a second round trip
-      // can only disagree with what it already knows.
-      const scopeProject = input.projectId ?? (input.threadId ? await projectIdFor(input.threadId) : undefined);
-      const effective =
-        input.threadId !== undefined
-          ? mergeOverrides(projectOverrides(scopeProject ?? ""), readOverrides(await threadMetadata(input.threadId)))
-          : projectOverrides(scopeProject ?? "");
-      const resolved = resolveSelection(
-        store,
-        { servers: effective.servers, tools: effective.tools },
-        deps.registered(),
-      );
-
-      const apply = input.apply && input.threadId !== undefined;
-      let restarted = false;
-      let deferred = false;
-      if (apply && input.threadId) {
-        const result = await restarter.apply(input.threadId, input.interrupt);
-        restarted = result.restarted;
-        deferred = result.deferred;
-      }
-
-      deps.publish();
-      return { restarted, deferred, truncated: resolved.truncated, offered: resolved.offered };
-    },
-
-    overridesFor,
   };
-
-  async function projectIdFor(threadId: string): Promise<string> {
-    try {
-      const thread = await bb.sdk.threads.get({ threadId });
-      return (thread as { projectId?: string }).projectId ?? "";
-    } catch {
-      return "";
-    }
-  }
 }
