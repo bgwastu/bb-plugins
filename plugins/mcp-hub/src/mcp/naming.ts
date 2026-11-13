@@ -1,93 +1,48 @@
-export const MAX_NAME_LENGTH = 48;
+// Tool names the model sees. Always `<server>_<tool>`, so a name says where it
+// comes from and two servers can never collide. Once assigned, a name is
+// stored and never recomputed.
+import { createHash } from "node:crypto";
 
-export interface NameResolution {
-  registeredName: string;
-  renamedFrom?: string;
+/**
+ * BB accepts `[a-zA-Z0-9_-]+`. Providers cap tool names at 64 characters and
+ * Claude Code spends 16 of them on its `mcp__bb-bridge__` prefix.
+ */
+export const MAX_TOOL_NAME = 48;
+
+function clean(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
-function sanitizeName(name: string): string {
-  // Replace characters outside [a-zA-Z0-9_-] with _
-  let sanitized = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-
-  // Collapse runs of _
-  sanitized = sanitized.replace(/_+/g, '_');
-
-  // Trim leading and trailing _
-  sanitized = sanitized.replace(/^_+|_+$/g, '');
-
-  return sanitized;
+/** A server id from a display name: lowercase, `[a-z0-9-]`, never empty. */
+export function slugify(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug.slice(0, 24).replace(/-+$/g, "") || "server";
 }
 
-function truncateName(
-  name: string,
-  maxLen: number = MAX_NAME_LENGTH
-): string {
-  if (name.length <= maxLen) {
-    return name;
+/** The first of `base`, `base-2`, `base-3`... that `taken` does not hold. */
+export function uniqueId(base: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(base)) return base;
+  for (let index = 2; ; index += 1) {
+    const candidate = `${base}-${index}`;
+    if (!taken.has(candidate)) return candidate;
   }
-
-  // Truncate to maxLen and clean up any trailing underscores
-  let truncated = name.substring(0, maxLen);
-  truncated = truncated.replace(/_+$/, '');
-
-  return truncated;
 }
 
-function isValidName(name: string): boolean {
-  // A valid name must be non-empty and contain at least one alphanumeric or dash
-  return name.length > 0 && /[a-zA-Z0-9-]/.test(name);
-}
-
-function isReserved(name: string): boolean {
-  return name === "update_environment_directory";
-}
-
-export function resolveName(args: {
-  serverId: string;
-  upstreamName: string;
-  taken: ReadonlySet<string>;
-}): NameResolution {
-  // Step 1: Sanitize and truncate the upstream name
-  let candidate = sanitizeName(args.upstreamName);
-  candidate = truncateName(candidate);
-
-  // Step 2: If valid, not taken, and not reserved, return it
-  if (isValidName(candidate) && !args.taken.has(candidate) && !isReserved(candidate)) {
-    return { registeredName: candidate };
+/**
+ * `<server>_<tool>`, shortened with a hash suffix rather than cut blind when
+ * it would be too long, so two long names never truncate to the same thing.
+ */
+export function toolName(serverId: string, upstreamName: string, taken: ReadonlySet<string>): string {
+  const full = `${clean(serverId)}_${clean(upstreamName) || "tool"}`;
+  let name = full;
+  if (full.length > MAX_TOOL_NAME) {
+    const digest = createHash("sha256").update(`${serverId}\n${upstreamName}`).digest("hex").slice(0, 6);
+    name = `${full.slice(0, MAX_TOOL_NAME - 7).replace(/_+$/g, "")}_${digest}`;
   }
-
-  // Step 3: Prefix with sanitized serverId
-  const prefix = sanitizeName(args.serverId);
-  let prefixed = `${prefix}_${candidate}`;
-  prefixed = truncateName(prefixed);
-
-  // Step 4: Try the prefixed name if valid, not taken, and not reserved
-  if (isValidName(prefixed) && !args.taken.has(prefixed) && !isReserved(prefixed)) {
-    return { registeredName: prefixed, renamedFrom: args.upstreamName };
+  if (!taken.has(name)) return name;
+  for (let index = 2; ; index += 1) {
+    const suffix = `_${index}`;
+    const candidate = `${name.slice(0, MAX_TOOL_NAME - suffix.length)}${suffix}`;
+    if (!taken.has(candidate)) return candidate;
   }
-
-  // Step 5: Try adding suffixes, truncating base as needed to fit within budget
-  for (let suffix = 2; suffix < 1000; suffix++) {
-    const suffixStr = `_${suffix}`;
-    const maxBaseLen = MAX_NAME_LENGTH - suffixStr.length;
-
-    let baseName = prefixed;
-    if (baseName.length > maxBaseLen) {
-      baseName = baseName.substring(0, maxBaseLen);
-      baseName = baseName.replace(/_+$/, '');
-    }
-
-    const candidateName = `${baseName}${suffixStr}`;
-
-    // Verify the result is valid, within budget, not taken, and not reserved
-    if (isValidName(candidateName) &&
-        candidateName.length <= MAX_NAME_LENGTH &&
-        !args.taken.has(candidateName) &&
-        !isReserved(candidateName)) {
-      return { registeredName: candidateName, renamedFrom: args.upstreamName };
-    }
-  }
-
-  // Should never reach here in practice
-  throw new Error(`Could not resolve name for ${args.upstreamName}`);
 }

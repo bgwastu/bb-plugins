@@ -1,227 +1,256 @@
 // bb-plugin-mcp-hub - the BB plugin backend entry.
 //
-// This file is wiring only. It opens the plugin's database, builds the MCP
-// stack (registry -> stdio supervisor -> client pool -> catalog), registers
-// the agent surfaces from the CACHED catalog, and exposes the registry over
-// RPC. Nothing here touches an MCP server: the load path must never block on
-// one, so discovery happens in `catalog.sync`, which runs from an explicit
-// RPC or a background refresh.
+// Wiring only. It opens the database and the secrets file, builds the stack
+// (store -> connections -> surfaces -> hub), registers every cached tool, and
+// hands the same hub to RPC, the CLI and the background service.
+//
+// Nothing on this path talks to an MCP server. Tools are registered from the
+// cache, so a server that is down, slow or waiting for a sign-in delays
+// nothing; connecting is the background service's job and a tool call's job.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { MCP_CHANGED } from "./contract.js";
-import { createCatalog } from "./src/catalog.js";
-import { createClientPool } from "./src/mcp/client-pool.js";
+import { createConnectionManager } from "./src/mcp/connection.js";
 import { createStdioSupervisor, loginShellPath } from "./src/mcp/stdio.js";
-import { createHttpTransport, createStdioTransport } from "./src/mcp/transport.js";
-import { discover } from "./src/oauth/discovery.js";
-import { createOAuthFlow, type OAuthFlow } from "./src/oauth/flow.js";
-import { registerCli } from "./src/server/cli.js";
-import { createSelectionStore, registerConfigure } from "./src/server/configure.js";
-import { quietLogger, warnQuietly } from "./src/server/log.js";
-import { registerMcpEndpoint } from "./src/server/mcp-endpoint.js";
-import { registerProviderEnv } from "./src/server/provider-env.js";
-import { oauthRedirectUri, registerOAuthRoutes } from "./src/server/routes.js";
-import { registerRpc } from "./src/server/rpc.js";
-import { registerServices } from "./src/server/services.js";
-import {
-  createMcpExecutor,
-  registerCatalogTools,
-  registeredToolOwners,
-} from "./src/server/tools.js";
-import { createOAuthStore } from "./src/storage/oauth-store.js";
-import { createRegistry } from "./src/storage/registry.js";
+import { normaliseSchema } from "./src/mcp/validate.js";
+import { importLegacy } from "./src/storage/legacy.js";
 import { MCP_MIGRATIONS } from "./src/storage/schema.js";
+import { createSecretStore, secretsPathFor } from "./src/storage/secrets.js";
+import { createStore } from "./src/storage/store.js";
+import { registerCli } from "./src/server/cli.js";
+import {
+  createHub,
+  createRestarter,
+  loadProjectSelections,
+  type Hub,
+  type Restarter,
+} from "./src/server/hub.js";
+import { quietLogger } from "./src/server/log.js";
+import { registerRpc } from "./src/server/rpc.js";
+import { resolveSelection, TOOL_LIMIT } from "./src/server/selection.js";
+import { registerServices } from "./src/server/services.js";
+import { createToolSurfaces } from "./src/server/tools.js";
+
+const LEGACY_IMPORTED_KEY = "legacy-imported";
 
 export default async function plugin(bb: BbPluginApi): Promise<void> {
   const database = bb.storage.database();
   bb.storage.migrate(database, MCP_MIGRATIONS);
-  const registry = createRegistry(database);
 
-  // Every one of these can log from work that outlives the load - a scheduled
-  // refresh, a client that fails long after the call that opened it - and a
-  // stale `bb` handle throws on any member, so none of them gets `bb.log`.
+  const store = createStore(database);
+  const secrets = createSecretStore(secretsPathFor(database.name));
   const log = quietLogger(bb);
-  const stdio = createStdioSupervisor({ resolvePath: loginShellPath, log });
-  const oauth: OAuthFlow = createOAuthFlow({
-    store: createOAuthStore(database),
-    discover,
-    fetchImpl: fetch,
-    // Read per call, never captured: `bb.server.loopbackBaseUrl` is
-    // bind-gated and throws when read at factory scope.
-    redirectUri: (origin) => oauthRedirectUri(bb, origin),
-    // A dead grant has to be legible somewhere other than a log file: this is
-    // what puts it in the panel, in `bb mcp-hub list`, and in the error an agent
-    // gets back when it calls the tool.
-    onAuthFailure: (serverId, message) => {
-      registry.setAuthError(serverId, message);
-      warnQuietly(bb, `MCP server "${serverId}" needs reconnecting: ${message}`);
-      bb.realtime.publish(MCP_CHANGED, null);
-      reportConfiguration();
-    },
-    onAuthRecovered: (serverId) => {
-      registry.setAuthError(serverId, null);
-      reportConfiguration();
-    },
-    // The server's own row, not a settings key. Which servers need a client
-    // the user created themselves is open-ended - Slack, Google, a self-hosted
-    // deployment, a second account for a service already configured - and a
-    // settings schema is a fixed set of names. `null` here means "no manual
-    // client saved", which is the flow's cue to try registration.
-    staticClient: async (serverId) => {
-      const server = registry.getServer(serverId);
-      if (!server?.oauthClientId) return null;
-      return {
-        clientId: server.oauthClientId,
-        clientSecret: server.oauthClientSecret,
-      };
-    },
-    scopes: (serverId) => registry.getServer(serverId)?.oauthScopes ?? null,
-    log,
-  });
-  const pool = createClientPool({
-    createTransport: async (server, resolveAuthHeaders) =>
-      server.transport === "stdio"
-        ? createStdioTransport(server, stdio)
-        : createHttpTransport(server, resolveAuthHeaders),
-    // Resolved on every REQUEST, not once per connection: a pooled client can
-    // outlive several access tokens, and `accessToken` refreshes at three
-    // quarters of the quoted lifetime, so a token that went stale while the
-    // client sat idle is renewed before the call that needed it. An
-    // unauthenticated server simply has no tokens stored and gets no header.
-    getAuthHeader: async (server): Promise<Record<string, string>> => {
-      // The url, not just the id: a grant is bound to the host it was issued
-      // for, and the slug survives a remove-and-re-add pointing elsewhere.
-      const token = await oauth.accessToken(server.id, server.url ?? "");
-      return token ? { Authorization: `Bearer ${token}` } : {};
-    },
-    log,
-  });
-  const catalog = createCatalog({
-    registry,
-    pool,
-    log,
-    // A server whose grant is gone answers 401 to everything. Without this it
-    // is retried on every cycle forever, which is how four days of identical
-    // failures ended up in a log with nobody told.
-    needsReconnect: (serverId) => oauth.status(serverId) === "needs-reconnect",
-  });
 
-  /**
-   * Marks the plugin as needing configuration while any server's credentials
-   * are dead.
-   *
-   * `bb.status` is the only surface this plugin has that reaches a user who
-   * does not have the panel open - it shows in `bb plugin list` and in the BB
-   * UI. The SDK clears it on every load, so it is re-asserted from each place
-   * that could have changed the answer rather than set once.
-   */
-  function reportConfiguration(): void {
-    try {
-      const broken = registry.listServers().filter((server) => server.authError !== null);
-      if (broken.length === 0) return;
-      bb.status.needsConfiguration(
-        broken.length === 1
-          ? `MCP server "${broken[0].displayName}" needs reconnecting in the MCP panel.`
-          : `${broken.length} MCP servers need reconnecting in the MCP panel: `
-            + broken.map((server) => server.displayName).join(", "),
-      );
-    } catch {
-      // Called from background work that can outlive the load; a status line
-      // is never worth taking the host down with.
+  // A one-time move from the 0.1 tables. The flag is what makes it one-time:
+  // deleting every server later must not resurrect the old list.
+  try {
+    if ((await bb.storage.kv.get<boolean>(LEGACY_IMPORTED_KEY)) !== true) {
+      const imported = importLegacy(database, secrets);
+      if (imported.servers > 0) {
+        log.info(
+          `Imported ${imported.servers} MCP server(s), ${imported.tools} tool(s) and ${imported.tokens} sign-in(s) from the previous version.`,
+        );
+      }
+      await bb.storage.kv.set(LEGACY_IMPORTED_KEY, true);
     }
+  } catch (error) {
+    log.warn(`Could not import the previous version's MCP servers: ${String(error)}`);
   }
 
-  const execute = createMcpExecutor({
-    registry, pool, stderrTail: (serverId) => stdio.stderrTail(serverId),
-    // Only ever consulted for a `readOnly` tool: a write is never replayed.
-    refreshAuth: (serverId) => oauth.refresh(serverId),
-    // A 401 that outlives a refresh is the other way a grant turns out to
-    // be dead. Recorded here so the panel says it too, rather than the only
-    // record being an error one agent saw once.
-    reportAuthFailure: (serverId, message) => {
-      registry.setAuthError(serverId, message);
-      bb.realtime.publish(MCP_CHANGED, null);
-      reportConfiguration();
+  const stdio = createStdioSupervisor({ resolvePath: loginShellPath, log });
+
+  // `onToolsChanged` fires from a notification handler long after this
+  // factory returns, and the sync it starts must coalesce: a server that
+  // changes its list twice in a second is one sync, not two.
+  const pendingSyncs = new Map<string, NodeJS.Timeout>();
+  let hub: Hub | null = null;
+
+  function scheduleSync(serverId: string): void {
+    const existing = pendingSyncs.get(serverId);
+    if (existing) clearTimeout(existing);
+    pendingSyncs.set(
+      serverId,
+      setTimeout(() => {
+        pendingSyncs.delete(serverId);
+        const server = store.getServer(serverId);
+        if (!server || !hub) return;
+        void hub.sync(server).catch((error: unknown) => {
+          log.warn(`Could not refresh "${server.name}": ${String(error)}`);
+        });
+      }, 400),
+    );
+  }
+
+  const connections = createConnectionManager({
+    secrets,
+    stdio,
+    log,
+    onToolsChanged: scheduleSync,
+  });
+
+  // Late-bound so the tool wrapper can call the hub, and the hub can ask the
+  // surfaces what registered: both directions are real, and neither is worth
+  // a third module.
+  const surfaces = createToolSurfaces(bb, {
+    store,
+    execute: async (request) => {
+      if (!hub) throw new Error("The MCP Hub plugin is still starting.");
+      return hub.runTool({
+        serverId: request.server.id,
+        tool: request.tool.name,
+        arguments: request.arguments,
+        threadId: request.threadId,
+      });
     },
-    });
-  const selection = createSelectionStore({
-    registry,
-    registeredOwners: () => registeredToolOwners(bb),
     log,
   });
 
-  /**
-   * Registers whatever the catalog gained and rebuilds the selection.
-   * `registerTool` works after load, so a sync adds tools live and they reach
-   * a thread when its provider session is next constructed - never a reload,
-   * which would cancel every pending interaction on every thread.
-   */
-  const onCatalogChanged = (): void => {
-    registerCatalogTools(bb, { registry, execute });
-    selection.refresh();
-  };
+  const restarter: Restarter = createRestarter(bb);
+  const projects = await loadProjectSelections(bb);
 
-  onCatalogChanged();
-  reportConfiguration();
-  registerConfigure(bb, {
-    selection: () => selection.snapshot(),
-  });
-  // The fallback callback, for a shell with no http(s) origin to redirect to.
-  // A browser that has one lands on the panel instead and completes the
-  // exchange over the authenticated `oauth_complete` RPC; this route is
-  // unauthenticated by necessity, since a redirect from the authorization
-  // server carries no BB origin and no plugin token, and the single-use
-  // `state` nonce is all that stands in for both.
-  registerOAuthRoutes(bb, {
-    flow: oauth,
-    onConnected: (serverId) => {
-      registry.setAuthError(serverId, null);
-      reportConfiguration();
-      // A freshly authorized server has a catalog worth reading, and the
-      // callback's browser tab is not somewhere to wait for it.
-      void catalog
-        .sync(serverId)
-        .then(() => { onCatalogChanged(); })
-        .catch((error: unknown) => {
-          warnQuietly(
-            bb,
-            `Connected MCP server "${serverId}" but could not read its tools: ${String(error)}`,
-          );
-        });
-    },
-  });
-  registerRpc(bb, {
-    registry,
-    catalog,
-    pool,
-    oauth,
-    onAuthChanged: reportConfiguration,
-    stderrTail: (serverId) => stdio.stderrTail(serverId),
-    onCatalogChanged,
-    onSelectionChanged: () => { selection.refresh(); },
-    dropClient: (serverId) => pool.close(serverId),
-  });
-  // Ask-flagged tools never reach this: it has no thread to prompt in.
-  registerMcpEndpoint(bb, { registry, execute });
-  registerCli(bb, { registry });
-  registerProviderEnv(bb);
-  registerServices(bb, {
-    catalog,
-    onCatalogChanged,
-    // Run before the catalog sweep so a grant that died overnight is
-    // discovered - and recorded - by the background pass rather than by the
-    // first tool call of the morning.
-    warmTokens: async () => {
-      for (const server of registry.listServers()) {
-        if (server.transport !== "http" || server.url === null) continue;
-        await oauth.accessToken(server.id, server.url);
+  hub = createHub(bb, {
+    store,
+    secrets,
+    connections,
+    projects,
+    restarter,
+    registered: () => surfaces.names(),
+    registerTools: () => surfaces.register(),
+    toolProblem: (name) => surfaces.problem(name),
+    publish: () => {
+      try {
+        bb.realtime.publish(MCP_CHANGED, null);
+        // A dead grant reaches `bb plugin list` and the BB UI through this,
+        // without anyone opening the panel.
+        reportStatus();
+      } catch {
+        // A publish after dispose; nothing is listening.
       }
     },
+    log,
   });
+  const readyHub = hub;
+
+  // From the cache, before anything connects.
+  const registeredNow = surfaces.register();
+  if (registeredNow.length > 0) log.info(`Registered ${registeredNow.length} MCP tool(s).`);
+
+  bb.agents.configure((ctx) => {
+    try {
+      const overrides = readyHub.overridesFor(ctx.thread.id, ctx.project.id, ctx.pluginMetadata);
+      const selection = resolveSelection(
+        store,
+        { servers: overrides.servers, tools: overrides.tools },
+        surfaces.names(),
+      );
+
+      const notes: string[] = [];
+      if (selection.truncated) {
+        notes.push(
+          `${selection.offered} MCP tools are available but a session carries at most ${TOOL_LIMIT}; `
+            + `only ${TOOL_LIMIT} are offered here. Turn some off in the MCP button next to the message box.`,
+        );
+      }
+      const broken = store
+        .listServers()
+        .filter((server) => server.enabled && connections.status(server.id).state === "needs-auth");
+      if (broken.length > 0) {
+        notes.push(
+          `These MCP servers need a sign-in and their tools will fail until they are reconnected in the MCP settings: ${broken
+            .map((server) => server.name)
+            .join(", ")}.`,
+        );
+      }
+
+      return {
+        // The schema travels with the selection, so a tool whose server changed
+        // its arguments after registration is advertised correctly to the next
+        // session instead of waiting for a plugin reload.
+        tools: selection.tools.map(({ tool }) => ({
+          name: tool.name,
+          parameters: normaliseSchema(tool.inputSchema),
+        })),
+        skills: ["mcp-hub"],
+        ...(notes.length > 0 ? { instructions: notes.join("\n\n") } : {}),
+      };
+    } catch (error) {
+      // A selection this plugin cannot compute must not take the thread's
+      // whole plugin surface with it; an empty selection still starts.
+      log.warn(`Could not resolve MCP tools for this thread: ${String(error)}`);
+      return { tools: [], skills: [] };
+    }
+  });
+
+  registerRpc(bb, readyHub);
+  registerCli(bb, { store, connections, hub: readyHub });
+  registerServices(bb, { store, connections, hub: readyHub, log });
+
+  // `bb.status` reaches `bb plugin list` and the BB UI without the panel being
+  // open - which is the only way a dead grant is visible to someone who is not
+  // already looking at MCP. The SDK clears it on every load, so it is
+  // re-asserted from each place the answer can change.
+  let flaggedForAuth = false;
+  let reloadScheduled = false;
+
+  /**
+   * The SDK has no way to clear `needs-configuration` short of a load, and a
+   * user who has just reconnected should not be told the plugin still needs
+   * configuring. A reload is cheap here - nothing on the load path talks to a
+   * server - but it cancels pending interactions, so it waits for every
+   * thread to be idle first.
+   */
+  function scheduleRecoveryReload(): void {
+    if (reloadScheduled) return;
+    reloadScheduled = true;
+    setTimeout(() => {
+      void (async () => {
+        try {
+          const running = await bb.sdk.threads.listRunning();
+          if (running.length > 0) {
+            // Try again later; the flag stays until a quiet moment.
+            reloadScheduled = false;
+            return;
+          }
+          await bb.sdk.plugins.reload({ pluginId: bb.pluginId });
+        } catch {
+          // Nothing to recover from a failed reload.
+        }
+      })();
+    }, 1500);
+  }
+
+  function reportStatus(): void {
+    try {
+      const broken = store
+        .listServers()
+        .filter((server) => server.enabled && connections.status(server.id).state === "needs-auth");
+      if (broken.length === 0) {
+        if (flaggedForAuth) {
+          flaggedForAuth = false;
+          scheduleRecoveryReload();
+        }
+        return;
+      }
+      flaggedForAuth = true;
+      bb.status.needsConfiguration(
+        broken.length === 1
+          ? `MCP server "${broken[0].name}" needs you to sign in again.`
+          : `${broken.length} MCP servers need you to sign in again: ${broken
+              .map((server) => server.name)
+              .join(", ")}.`,
+      );
+    } catch {
+      // Background work may outlive the load; a status line is never worth
+      // taking the host down with.
+    }
+  }
+  reportStatus();
 
   // Dispose hooks run before BB drains in-flight invocations, so this is the
   // only place that reliably reaps MCP clients and stdio children.
   bb.onDispose(async () => {
-    await pool.closeAll();
+    for (const timer of pendingSyncs.values()) clearTimeout(timer);
+    pendingSyncs.clear();
+    await connections.closeAll();
     await stdio.killAll();
   });
 }

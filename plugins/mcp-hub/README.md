@@ -1,212 +1,157 @@
 # bb-plugin-mcp-hub
 
-
 Connect MCP servers to BB - local stdio processes and remote endpoints, on
-OAuth or on a static token in a request header - and use their tools in every
-thread.
+OAuth, a bearer token or custom headers - and use their tools in every thread.
 
-A connected server's tools are registered as ordinary BB agent tools under the
-name the server gives them, so every provider BB supports can call them without
-knowing MCP exists. A name two servers both want gets a `<server>_` prefix on
-whichever asked second, and that resolved name is then persisted and never
-reassigned.
+Every MCP tool is registered as an ordinary BB agent tool under the name
+`<server>_<tool>`. There is no `mcp_call` front door: the model sees
+`linear_create_issue`, calls it like any other tool, and the result comes back
+in the same shape a native tool returns.
 
-## Connection types
+## Two surfaces
 
-The panel asks what you are adding, not how BB should speak to it:
+**The management page** (Settings -> MCP) is where a server is added, edited,
+connected and removed. One line per server: name, target, status, tool count,
+last seen. Everything else - the tool switches, a Test dialog that runs a tool
+with a form built from its schema, and the last calls with their errors - is
+one click deeper, in the server's own drawer. No second tab, no dashboard.
 
-- **Local command** - a program BB runs on this machine and talks to over
-  stdio.
-- **Remote MCP server** - a hosted endpoint, signed into with OAuth or
-  authenticated with a static header.
-- **Gateway (Executor)** - one endpoint in front of many integrations. A
-  handful of tools reach everything connected there, so the tool count stays
-  small and the *descriptions* are what change as integrations are added -
-  which is why the panel has a Reload button. See "Tools that changed".
+**The MCP button in the composer footer** is the everyday surface: which
+servers and tools *this conversation* may use. A switch per server, the tools
+underneath it, a filter, and Save. It is also in the new-thread composer,
+where it edits the project's default selection instead of a thread's.
 
-Each type shows only the fields it needs; headers, OAuth client credentials,
-environment and working directory sit behind one Advanced disclosure. A
-server's row carries one action - Connect, Reconnect or Test - and everything
-else lives in its Settings dialog.
+## Selections, and why Save restarts the session
 
-`kind` is stored, but nothing branches on it: a gateway is Streamable HTTP like
-any other remote server, and gateway behaviour is still DETECTED from a tool's
-description (`src/server/gateway.ts`). The kind is what the form asks for and
-what a row is labelled with.
+A provider session is built with its tool list. BB has no way to add, remove or
+update a registered tool inside a live session, so a selection change has to
+reach a session boundary to be real. Save therefore:
 
-## The only MCP source
+1. writes the change into the thread's plugin metadata (only the entries you
+   actually moved - see below),
+2. stops the thread with `bb.sdk.threads.stop`, which releases its loaded
+   runtime but keeps the conversation, and
+3. lets the next message cold-start with the new tools.
 
-A provider also loads MCP servers of its own accord, which arrive alongside
-this plugin's tools and outside its per-project selection. Twelve claude.ai
-connectors cost ~188k prompt tokens; the panel cannot make that cheaper.
+A stop mid-turn would interrupt the work, so Save mid-turn says "applies when
+this turn ends" and stops the thread on its `thread.idle` event. **Apply now**
+interrupts instead. Anything the agent left running in that session - a
+background shell, a sub-agent - dies with it, and the popup says so.
 
-So the plugin sets `ENABLE_CLAUDEAI_MCP_SERVERS=0` on every Claude Code thread
-it runs in. This is unconditional and there is no setting for it.
+Turning a tool **off** needs none of that: the tool stays in the session but
+refuses the call, so off is immediate. Only turning something on waits for a
+restart.
 
-Two things it does not cover:
+## A default reaches every thread
 
-- Servers you wrote into `~/.claude.json` yourself. The only lever over those
-  is `--strict-mcp-config`, and BB drives Claude Code through the Agent SDK
-  and never passes it.
-- Codex. It has no environment variable for this, and contributed environment
-  would not reach it anyway - BB maps it to `shell_environment_policy.set.*`,
-  which is the environment for shell commands the agent runs, not the codex
-  process. Switch it off by hand, once, in `~/.codex/config.toml`:
+Two layers, and only two:
 
-  ```toml
-  [features]
-  apps = false
-  ```
+- the **global switch** on a server or a tool, on the management page;
+- a **thread's override**, stored in its plugin metadata, or a **project's
+  default**, stored in the plugin's key-value storage for the new-thread
+  composer.
 
-  That is the account-connector switch, the counterpart of the Claude Code
-  one. It leaves `features.plugins` alone, it applies to Codex everywhere and
-  not only inside BB, and it does not touch literal `[mcp_servers.*]` entries.
+Where a thread has no override it follows the global switch, so a tool added or
+turned on later reaches conversations that never expressed an opinion - which
+is the whole reason the old default-off behaviour felt broken. The footer
+popup stores only what you moved; matching the global switch again removes the
+override rather than pinning it.
 
-## Layout
+New tools arrive **on**. The provider cap is 256 tools per session; past it the
+selection is clamped and both the popup and the panel say how many did not
+fit.
 
-- `server.ts` - wiring only. Opens the database, builds the stack
-  (registry -> stdio supervisor -> client pool -> catalog), registers the
-  agent tools from the *cached* catalog, and exposes the registry over RPC.
-  Nothing on the load path talks to an MCP server or waits on the project list.
-- `src/storage/` - the SQLite registry (servers with their OAuth client
-  configuration and their static request headers, catalog, per-project
-  overrides) and the OAuth token store.
-- `src/mcp/` - the client pool, the stdio supervisor, transports, JSON Schema
-  flattening, content translation, and tool naming.
-- `src/oauth/` - discovery, dynamic client registration, PKCE, and the token
-  lifecycle.
-- `src/server/` - the surfaces: agent tools, RPC, HTTP routes, per-project
-  tool selection, the provider environment, the CLI, and the background
-  schedule.
-- `src/ui/` - the connections panel.
-- `skills/mcp/SKILL.md` - what agents are told about MCP tools.
+## Errors are answers, not dead connections
+
+A JSON-RPC error is the server doing its job. A `-32602 Invalid params` reply
+used to drop the client - and, for stdio, kill the child process other threads
+were still calling. Now:
+
+- **Arguments are checked against the tool's own schema before the call.** A
+  bad argument names the field and the tool is not called at all.
+- **Protocol errors travel back as tool errors**, with the server's code and
+  message, and the connection stays open.
+- **A transport failure drops the client and retries once - reads only.** A
+  write that may have landed is reported, never replayed.
+- **A 401 is recorded against the server** and shown in the panel, on the row,
+  in `bb mcp-hub list`, and through `bb plugin list` (`needs-configuration`),
+  instead of only in a log line.
+
+Results keep everything the server sent: text, images, resources, and
+`structuredContent` alongside text - which the old translation dropped.
+
+## Connections
+
+One live client per server, opened lazily by a tool call or by the background
+service at load, never on the plugin load path. State is `idle`, `connecting`,
+`ready`, `needs-auth` or `failed`, with the last error and last-seen time.
+
+- **Stdio**: a child process per server in its own process group, `PATH`
+  resolved the way a login shell would, stderr captured into a bounded tail so
+  a failure is legible in the panel. Killing it signals the whole group, so an
+  `npx` wrapper cannot leave grandchildren behind.
+- **HTTP**: Streamable HTTP first, with one SSE fallback - enough servers still
+  speak only the older protocol. Auth headers are attached per request.
+- **`tools/list_changed`** triggers a coalesced resync of that server's catalog.
+- **A plugin reload is not needed for a selection change.** A changed schema is
+  advertised to the next session through the selection's `parameters` override;
+  only a changed *description* waits for the next reload, and nothing breaks
+  meanwhile.
 
 ## Signing in
 
-The redirect URI is built from the origin the panel is being served from, at
-the moment Connect is pressed - never from `bb.server.loopbackBaseUrl`, which
-is `127.0.0.1` and therefore nowhere at all for a browser on another machine.
-One BB answers on several origins at once (a tailnet name, a BB Connect tunnel,
-loopback), and only the browser doing the authorizing knows which it is on.
+OAuth is the MCP SDK's own client - discovery, dynamic registration, PKCE,
+refresh and the resource indicator - not a hand-rolled flow. This plugin
+supplies what the SDK cannot know:
+
+- **The redirect URI**, built from the origin the browser is on when Connect is
+  pressed. Not from `bb.server.loopbackBaseUrl`, which is `127.0.0.1` and
+  therefore nowhere at all for a browser on another machine.
+- **Where credentials live**: one 0600 JSON file next to the plugin database,
+  never in SQLite and never in an RPC response. A corrupt file means "sign in
+  again", not a failed load.
+- **A hand-registered client**, per server, for providers that do not support
+  dynamic registration, with its scopes and secret.
 
 The redirect lands on the **panel**, at
-`<origin>/plugins/mcp-hub/mcp-hub/oauth/callback`, rather than on the plugin's public
-HTTP route. That is what makes it work on an origin sitting behind a sign-in:
-BB Connect answers `/api/...` with 401 and a login page, which throws the
-authorization code away, while a panel URL is an ordinary app URL. The code is
-then exchanged over the panel's authenticated `oauth_complete` RPC, so the
-public route is no longer on the critical path - it stays only as the fallback
-for a shell with no http(s) origin to offer.
+`<origin>/plugins/mcp-hub/mcp-hub/oauth/callback`, not on the plugin's public
+HTTP route: BB Connect answers `/api/...` with 401 and a login page, which
+throws the authorization code away, while a panel URL is an ordinary app URL.
+The code is then exchanged over the panel's authenticated `oauth_resolve` /
+`oauth_complete` RPC.
 
-One consequence worth knowing: connecting from a second origin registers a
-different redirect URI. That is free under dynamic client registration and not
-free for a client you created by hand, where both URIs have to be listed in the
-provider. The Settings dialog shows the URI this browser would use next to the
-one the stored client was registered with, and says so when they differ.
+## Upgrading from 0.1
 
-## When credentials die
+`src/storage/legacy.ts` imports the old tables once - servers, their tools,
+OAuth grants, dynamically registered clients, headers and environment - and
+moves credentials into the secrets file. It runs on the first load after the
+upgrade and records that it ran, so deleting every server later cannot
+resurrect the old list. The old tables are left in place as a fallback.
 
-A refresh that is refused outright, or a 401 that survives one, is recorded
-against the server and shown in three places: a banner at the top of the panel,
-the server's own row, and `bb mcp-hub list`. The plugin also marks itself
-`needs-configuration`, which reaches `bb plugin list` and the BB UI without the
-panel being open.
+## Layout
 
-This exists because the silent version ran for four days: Cloudflare Access
-ended a grant at its 24-hour **Grant session duration**, the refresh came back
-`400 invalid_grant`, and the only record was one line in a log file while the
-background sweep re-failed every seventeen minutes. A dead grant is now backed
-off to once an hour, and the message quotes what the authorization server
-actually said - plus, for a `*.cloudflareaccess.com` token endpoint, the
-setting that is really ending it. Reconnecting there buys another 24 hours and
-nothing else; raising Grant session duration in Zero Trust is the fix.
+- `server.ts` - wiring only: migrations, the one-time import, the stack
+  (store -> connections -> tool surfaces -> hub), and the four surfaces.
+- `src/storage/` - `schema.ts` (append-only migrations), `store.ts` (servers,
+  tools, call log), `secrets.ts` (0600 file), `legacy.ts` (the import).
+- `src/mcp/` - `stdio.ts`, `http.ts`, `connection.ts`, `execute.ts`,
+  `validate.ts`, `content.ts`, `oauth.ts`, `naming.ts`.
+- `src/server/` - `hub.ts` (the domain layer), `selection.ts`, `tools.ts`,
+  `rpc.ts`, `cli.ts`, `services.ts`, `log.ts`.
+- `src/ui/` - `panel.tsx`, `server-form.tsx`, `server-detail.tsx`,
+  `tool-test.tsx`, `footer.tsx`, `data.ts`, `rpc.ts`.
+- `contract.ts` - the RPC contract both sides compile against.
+- `skills/mcp-hub/SKILL.md` - what agents are told.
 
-## Tools that changed
+## CLI
 
-`registerTool` has no update and no unregister, so a description or schema
-that moves after a name was claimed reaches nobody - the panel's own Sync
-button included. Adding one integration to a gateway moves nothing but one
-tool's description, so this is the normal way a gateway's catalog changes
-rather than a rare event.
-
-The panel therefore counts the drifted tools and offers a **Reload plugin**
-button, which is the only thing that fixes it (`bb plugin reload mcp` does the
-same from a shell). Deliberately a button and never automatic: a reload
-cancels every tool-approval prompt waiting on every thread, which is not
-something to do to someone who did not ask for it.
-
-## What agents are told
-
-Two surfaces, neither of which the user has to write:
-
-- `skills/mcp/SKILL.md` - how MCP tools work here, what a gateway is, and what
-  each failure message is asking for.
-- Dynamic instructions from `bb.agents.configure`, rebuilt on every sync,
-  naming each connected gateway and the services it reaches. A provider that
-  defers a tool to a bare name and loads its description only on a keyword
-  search will never match "notion" against a tool called `execute`, so the
-  integrations are stated up front along with the exact-name load
-  (`ToolSearch select:mcp__bb-bridge__execute`) that retrieves the rest.
-
-## Design invariants
-
-- **The load path never blocks on a server.** Tools are registered from the
-  cached catalog. Discovery happens in `catalog.sync`, driven by an explicit
-  RPC or the background refresh.
-- **Registered names are permanent.** A name is assigned at first sync and
-  never reassigned, so a thread's history keeps meaning after a rename.
-- **A default reaches every project; a project may disagree.** A tool marked
-  default-on is offered everywhere, and a project's binding row is an override
-  on top of it - force-on or force-off - so what a project gets is
-  `defaults - forcedOff + forcedOn`. Storing the projects that disagree rather
-  than a project-to-names map is what lets a default reach a project created a
-  second ago, and it keeps the project list off the load path.
-- **This plugin is the MCP source.** Claude Code threads run with
-  `ENABLE_CLAUDEAI_MCP_SERVERS=0`, contributed per thread. A tool the panel
-  did not offer should not be in the session.
-- **A gateway's services are named in words.** A description that lists the
-  integrations behind it as slugs - a bullet list of bare `notion_com` - is
-  registered with those slugs repeated as words. A provider may defer a tool
-  to a bare name and load its description only when the model searches for
-  it, and that search matches whole words, so without this an agent asked
-  about Notion finds nothing and reports that nothing offers Notion.
-  `bb mcp-hub list` prints the same list for a shell.
-- **Nothing asks.** Tools run as soon as an agent calls them. BB puts plugin
-  tools into the provider's allow list, so there is no prompt of any kind;
-  what an agent can reach is decided by which servers and tools are enabled.
-- **A write is never replayed.** A 401 buys one refresh and one retry for a
-  read-only tool. A write that fails is reported, not repeated.
-- **A live connection never carries a stale bearer.** The HTTP transport
-  resolves its auth header per REQUEST, through a `fetch` of its own, rather
-  than baking one into `requestInit` at construction. A pooled client outlives
-  several access tokens and cannot be corrected from outside, so this is the
-  only place the refresh can reach.
-- **The callback host is whatever the browser is on.** Detected client-side at
-  connect time, and it lands on the panel so that an origin behind a sign-in
-  works too.
-- **Dispose reaps everything.** `bb.onDispose` closes every pooled MCP client
-  and kills every stdio child; dispose hooks run before BB drains in-flight
-  invocations, so it is the only place that reliably gets them.
-
-## Background work
-
-One durable cron schedule, `catalog-refresh`, re-reads every enabled server's
-tool list every 17 minutes and registers whatever is new. A connected stdio
-child persists across cycles, so N stdio servers cost N long-lived processes,
-not N spawns every 17 minutes.
-
-A sync only ever *adds* names, for the reason under "Tools that changed"; the
-panel and `bb mcp-hub list` mark a row that has moved since it was registered.
-
-The same cycle first warms tokens, and its job is not freshness but
-visibility. Tokens stay fresh on their own: `OAuthFlow.accessToken` refreshes
-at three quarters of the quoted lifetime and the HTTP transport calls it on
-every request, so a token that went stale while a pooled client sat idle is
-renewed before the request that needed it - which is also why a write against
-such a client no longer fails once, as it used to. Refreshing on a schedule is
-how a grant that DIED is discovered while nobody is waiting on an answer,
-turning it into a recorded, surfaced error within seventeen minutes rather than
-into whatever tool call happens to be first in the morning.
+```sh
+bb mcp-hub                          # servers, status, tool counts
+bb mcp-hub list --tools             # and every tool
+bb mcp-hub sync <server>            # reconnect and reread one server
+bb mcp-hub test <server>            # connect and report what it answers
+bb mcp-hub call <server> <tool> --args '{"query":"x"}'
+```
 
 ## Development
 
@@ -214,24 +159,18 @@ into whatever tool call happens to be first in the morning.
 npm install
 npm run verify   # lint, typecheck, tests, build
 bb plugin install . --yes
-bb plugin reload mcp
+bb plugin reload mcp-hub
 ```
 
 `npm run verify` must pass before a commit. `bb plugin build` writes
 `dist/server.js`, `dist/app.js`, and `dist/app.css`.
 
-`bb mcp-hub` lists the configured servers and their tools from a shell.
-
-## UI components
+Tests run against real MCP servers as child processes (`tests/fixtures/`), not
+mocks: the point of most of them is what the wire actually does when a server
+refuses a call or changes its tool list.
 
 `components/ui/` is vendored source this plugin owns (the shadcn model): edit
-the files freely - they never update out from under you. Add more from the BB
-component registry:
-
-```
-npx shadcn add @bb/select @bb/table
-```
-
-React and the BB-shimmed packages (the Radix portal primitives, `sonner`) are
-provided by the BB app at runtime and stay in `devDependencies`; everything
-else that is bundled belongs in `dependencies`.
+the files freely - they never update out from under you. React and the
+BB-shimmed packages (the Radix portal primitives, `sonner`) are provided by the
+BB app at runtime and stay in `devDependencies`; everything else that is
+bundled belongs in `dependencies`.

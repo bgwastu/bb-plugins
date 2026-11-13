@@ -1,136 +1,79 @@
-import type { PluginAgentToolContentPart } from "@get-bb/plugin-sdk";
+// MCP tool results, translated into what a BB agent tool may return.
+//
+// The old translation had two lossy habits worth naming. It dropped
+// `structuredContent` whenever the server also sent text, which is exactly
+// what a server does when it has both a human-readable summary and a machine
+// result; and it turned anything it did not recognise into JSON.stringify of
+// the part, which reads as noise to a model. Here every part keeps its own
+// meaning, and structure is appended as one labelled block.
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-/**
- * Translates MCP tool-result content into the two content part types BB
- * accepts.
- *
- * MCP tool results can carry text, images, audio, embedded resources, and
- * resource links. BB's native tool result only accepts `text` and `image`
- * parts; anything else thrown at it fails inside BB and surfaces to the
- * user as a generic tool failure with no useful detail. So `text` and
- * `image` pass through unchanged, and everything else is summarised into a
- * `text` part that keeps the information a human (or the model) would need
- * - the mime type and size for audio, the uri and inline text for
- * resources - rather than being dropped silently.
- */
+export type ToolContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
 
-/** Text parts larger than this are truncated so a single tool result cannot blow the context budget. */
-export const MAX_TEXT_BYTES = 128 * 1024;
-
-/**
- * The other half of that budget (design section 6).
- *
- * An image cannot be truncated - half a PNG is not a smaller PNG - so an
- * oversized one is replaced by a text part that says what was dropped and how
- * big it was. The model then knows a screenshot existed and can ask for a
- * narrower one, which is strictly better than a provider rejecting the whole
- * turn on a multi-megabyte attachment.
- */
-export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+export interface TranslatedResult {
+  content: ToolContentPart[];
+  isError: boolean;
 }
 
-function truncateText(text: string): string {
-  const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes <= MAX_TEXT_BYTES) return text;
-  // Walk by Unicode code point (via the string iterator, which Array.from
-  // uses), not by UTF-16 code unit / raw string index. Slicing by index can
-  // land inside a surrogate pair and leave a lone surrogate in the output;
-  // iterating by code point never splits one, since a surrogate pair is a
-  // single iteration step.
-  let byteCount = 0;
-  let end = 0;
-  const codePoints = Array.from(text);
-  for (; end < codePoints.length; end++) {
-    byteCount += Buffer.byteLength(codePoints[end], "utf8");
-    if (byteCount > MAX_TEXT_BYTES) break;
+const AUDIO_NOTE = "[the server returned audio, which this client cannot show]";
+
+function asText(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
   }
-  const slice = codePoints.slice(0, end).join("");
-  return `${slice}... [truncated, ${bytes} bytes total]`;
 }
 
-function textPart(text: string): PluginAgentToolContentPart {
-  return { type: "text", text: truncateText(text) };
-}
-
-function summariseResource(part: Record<string, unknown>): PluginAgentToolContentPart {
+/** One-line preview of a resource, with its body when it carries text. */
+function resourceText(part: { resource: Record<string, unknown> }): string {
   const resource = part.resource;
-  if (!isRecord(resource)) {
-    return textPart(`[resource]`);
-  }
-  const uri = typeof resource.uri === "string" ? resource.uri : "unknown";
-  if (typeof resource.text === "string") {
-    return textPart(`[resource: ${uri}]\n${resource.text}`);
-  }
-  const mimeType = typeof resource.mimeType === "string" ? resource.mimeType : "unknown";
-  return textPart(`[resource: ${uri}, ${mimeType}]`);
+  const uri = typeof resource.uri === "string" ? resource.uri : "";
+  const text = typeof resource.text === "string" ? resource.text : null;
+  const title = typeof resource.title === "string" ? resource.title : null;
+  const heading = [title, uri].filter(Boolean).join(" - ");
+  if (text !== null) return heading ? `${heading}\n\n${text}` : text;
+  const blob = typeof resource.blob === "string" ? resource.blob : null;
+  return `${heading || "resource"}${blob ? ` (base64, ${blob.length} characters)` : " (no text body)"}`;
 }
 
-function summariseResourceLink(part: Record<string, unknown>): PluginAgentToolContentPart {
-  const uri = typeof part.uri === "string" ? part.uri : "unknown";
-  const name = typeof part.name === "string" ? part.name : uri;
-  return textPart(`[resource link: ${name} (${uri})]`);
-}
+export function translateResult(result: CallToolResult): TranslatedResult {
+  const content: ToolContentPart[] = [];
 
-function summariseAudio(part: Record<string, unknown>): PluginAgentToolContentPart {
-  const mimeType = typeof part.mimeType === "string" ? part.mimeType : "unknown";
-  const data = typeof part.data === "string" ? part.data : "";
-  const bytes = Buffer.byteLength(data, "base64");
-  return textPart(`[audio, ${mimeType}, ${bytes} bytes]`);
-}
-
-function convertPart(part: unknown): PluginAgentToolContentPart | undefined {
-  if (!isRecord(part)) return undefined;
-  switch (part.type) {
-    case "text":
-      return textPart(typeof part.text === "string" ? part.text : "");
-    case "image": {
-      const data = typeof part.data === "string" ? part.data : "";
-      const mimeType = typeof part.mimeType === "string"
-        ? part.mimeType
-        : "application/octet-stream";
-      const bytes = Buffer.byteLength(data, "base64");
-      if (bytes > MAX_IMAGE_BYTES) {
-        return textPart(
-          `[image dropped: ${mimeType}, ${bytes} bytes, over the `
-          + `${MAX_IMAGE_BYTES} byte limit. Ask the server for a smaller one.]`,
-        );
+  for (const part of result.content ?? []) {
+    switch (part.type) {
+      case "text":
+        content.push({ type: "text", text: part.text });
+        break;
+      case "image":
+        content.push({ type: "image", data: part.data, mimeType: part.mimeType });
+        break;
+      case "audio":
+        content.push({ type: "text", text: AUDIO_NOTE });
+        break;
+      case "resource":
+        content.push({ type: "text", text: resourceText(part as { resource: Record<string, unknown> }) });
+        break;
+      case "resource_link": {
+        const label = part.title || part.name || part.uri;
+        content.push({ type: "text", text: `${label}\n${part.uri}` });
+        break;
       }
-      return { type: "image", data, mimeType };
+      default:
+        content.push({ type: "text", text: asText(part) });
     }
-    case "audio":
-      return summariseAudio(part);
-    case "resource":
-      return summariseResource(part);
-    case "resource_link":
-      return summariseResourceLink(part);
-    default:
-      return textPart(JSON.stringify(part));
   }
-}
 
-/**
- * Converts an MCP tool result's `content` array into BB content parts,
- * falling back to a pretty-printed `structuredContent` when `content` is
- * empty (some MCP servers only populate the structured side).
- */
-export function toBbContent(
-  content: unknown,
-  structuredContent?: unknown,
-): PluginAgentToolContentPart[] {
-  const parts = Array.isArray(content) ? content : [];
-  if (parts.length === 0) {
-    if (structuredContent !== undefined) {
-      return [textPart(JSON.stringify(structuredContent, null, 2))];
-    }
-    return [];
+  if (result.structuredContent !== undefined) {
+    content.push({ type: "text", text: `Structured result:\n${asText(result.structuredContent)}` });
   }
-  const converted: PluginAgentToolContentPart[] = [];
-  for (const part of parts) {
-    const bbPart = convertPart(part);
-    if (bbPart) converted.push(bbPart);
+
+  if (content.length === 0) {
+    content.push({ type: "text", text: result.isError ? "The tool failed with no message." : "Done." });
   }
-  return converted;
+
+  return { content, isError: result.isError === true };
 }

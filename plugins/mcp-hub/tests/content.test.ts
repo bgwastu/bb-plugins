@@ -1,73 +1,73 @@
 import { describe, expect, it } from "vitest";
-import { toBbContent } from "../src/mcp/content.js";
+import { translateResult } from "../src/mcp/content.js";
 
-describe("toBbContent", () => {
-  it("passes text and image through", () => {
-    expect(toBbContent([
-      { type: "text", text: "hi" },
-      { type: "image", data: "AAA", mimeType: "image/png" },
-    ])).toEqual([
-      { type: "text", text: "hi" },
-      { type: "image", data: "AAA", mimeType: "image/png" },
-    ]);
+describe("translateResult", () => {
+  it("keeps text as text", () => {
+    const translated = translateResult({ content: [{ type: "text", text: "hi" }] });
+    expect(translated).toEqual({ content: [{ type: "text", text: "hi" }], isError: false });
   });
 
-  it("summarises content types BB rejects", () => {
-    const parts = toBbContent([
-      { type: "audio", data: "AAA", mimeType: "audio/wav" },
-      { type: "resource", resource: { uri: "file:///x.txt", text: "body" } },
-    ]);
-    expect(parts.every((part) => part.type === "text")).toBe(true);
-    expect(JSON.stringify(parts)).toContain("file:///x.txt");
+  it("keeps structured content even when there is text", () => {
+    const translated = translateResult({
+      content: [{ type: "text", text: "summary" }],
+      structuredContent: { count: 2 },
+    });
+    expect(translated.content).toHaveLength(2);
+    expect(translated.content[1]).toEqual({
+      type: "text",
+      text: 'Structured result:\n{\n  "count": 2\n}',
+    });
   });
 
-  it("falls back to structuredContent when content is empty", () => {
-    expect(toBbContent([], { rows: 2 })).toEqual([
-      { type: "text", text: JSON.stringify({ rows: 2 }, null, 2) },
-    ]);
+  it("passes an image through untouched", () => {
+    const translated = translateResult({
+      content: [{ type: "image", data: "AAAA", mimeType: "image/png" }],
+    });
+    expect(translated.content[0]).toEqual({ type: "image", data: "AAAA", mimeType: "image/png" });
   });
 
-  it("truncates oversized text", () => {
-    const [part] = toBbContent([{ type: "text", text: "x".repeat(200_000) }]);
-    expect(part.type).toBe("text");
-    if (part.type === "text") {
-      expect(part.text.length).toBeLessThan(200_000);
-      expect(part.text).toContain("truncated");
-    }
+  it("reads a resource's text body", () => {
+    const translated = translateResult({
+      content: [
+        {
+          type: "resource",
+          resource: { uri: "file:///a.txt", text: "body" },
+        },
+      ],
+    });
+    expect(translated.content[0]).toEqual({ type: "text", text: "file:///a.txt\n\nbody" });
   });
 
-  it("truncates oversized text without splitting a surrogate pair", () => {
-    const [part] = toBbContent([
-      { type: "text", text: `a${"\u{1F600}".repeat(60_000)}` },
-    ]);
-    expect(part.type).toBe("text");
-    if (part.type === "text") {
-      expect(part.text).toContain("truncated");
-      expect(
-        Array.from(part.text).every((ch) => {
-          const code = ch.codePointAt(0)!;
-          return code < 0xd800 || code > 0xdfff;
-        }),
-      ).toBe(true);
-    }
-  });
-});
-
-describe("image cap", () => {
-  it("replaces an image over the cap with a note saying what was dropped", () => {
-    // 3 MiB of base64 is 2.25 MiB decoded, past the 2 MiB cap.
-    const data = "A".repeat(3 * 1024 * 1024);
-    const parts = toBbContent([{ type: "image", data, mimeType: "image/png" }]);
-    expect(parts).toHaveLength(1);
-    expect(parts[0].type).toBe("text");
-    const text = parts[0].type === "text" ? parts[0].text : "";
-    expect(text).toContain("image/png");
-    expect(text).toContain(String(Buffer.byteLength(data, "base64")));
+  it("says how much it is not showing of a binary resource", () => {
+    const translated = translateResult({
+      content: [{ type: "resource", resource: { uri: "file:///a.bin", blob: "AAAA" } }],
+    });
+    expect(translated.content[0]).toEqual({
+      type: "text",
+      text: "file:///a.bin (base64, 4 characters)",
+    });
   });
 
-  it("leaves an image under the cap alone", () => {
-    const data = "A".repeat(1024);
-    expect(toBbContent([{ type: "image", data, mimeType: "image/png" }]))
-      .toEqual([{ type: "image", data, mimeType: "image/png" }]);
+  it("turns a link into something readable", () => {
+    const translated = translateResult({
+      content: [{ type: "resource_link", uri: "https://x", name: "Docs", title: "The docs" }],
+    });
+    expect(translated.content[0]).toEqual({ type: "text", text: "The docs\nhttps://x" });
+  });
+
+  it("carries the error flag through", () => {
+    const translated = translateResult({
+      content: [{ type: "text", text: "nope" }],
+      isError: true,
+    });
+    expect(translated.isError).toBe(true);
+  });
+
+  it("never returns an empty result", () => {
+    expect(translateResult({ content: [] }).content).toHaveLength(1);
+    expect(translateResult({ content: [], isError: true }).content[0]).toEqual({
+      type: "text",
+      text: "The tool failed with no message.",
+    });
   });
 });

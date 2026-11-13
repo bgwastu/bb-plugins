@@ -2,8 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import type { ServerRecord } from "../storage/registry.js";
-
+import type { ServerRecord } from "../storage/store.js";
 const STDERR_TAIL_LINES = 100;
 const KILL_GRACE_MS = 2000;
 
@@ -157,7 +156,8 @@ interface SupervisedChild {
 }
 
 export interface StdioSupervisor {
-  transportFor(server: ServerRecord): Promise<Transport>;
+  /** Spawns (or respawns) the child for `server` and returns a transport on it. */
+  transportFor(server: ServerRecord, env: Record<string, string>): Promise<Transport>;
   stderrTail(serverId: string): string[];
   killAll(): Promise<void>;
 }
@@ -207,7 +207,7 @@ export function createStdioSupervisor(deps: {
     stderrBuffers.set(serverId, buffer);
   }
 
-  async function transportFor(server: ServerRecord): Promise<Transport> {
+  async function transportFor(server: ServerRecord, configuredEnv: Record<string, string>): Promise<Transport> {
     if (!server.command) {
       throw new Error(`Server "${server.id}" has no command configured for stdio transport`);
     }
@@ -215,7 +215,9 @@ export function createStdioSupervisor(deps: {
     const path = await deps.resolvePath();
     const baseEnv: Record<string, string> = { PATH: path };
     if (process.env.HOME) baseEnv.HOME = process.env.HOME;
-    const env = { ...baseEnv, ...server.env };
+    // Configured variables live in the secrets file, not the database: a stdio
+    // server's environment is usually where its API key goes.
+    const env = { ...baseEnv, ...configuredEnv };
 
     // A server id being spawned again (typically after a failed tool call
     // dropped the cached client) must not orphan the previous child - close

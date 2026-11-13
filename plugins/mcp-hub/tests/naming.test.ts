@@ -1,68 +1,64 @@
-// tests/naming.test.ts
 import { describe, expect, it } from "vitest";
-import { resolveName } from "../src/mcp/naming.js";
+import { MAX_TOOL_NAME, slugify, toolName, uniqueId } from "../src/mcp/naming.js";
 
-describe("resolveName", () => {
-  it("passes an upstream name through untouched", () => {
-    expect(resolveName({
-      serverId: "notion", upstreamName: "notion-search", taken: new Set(),
-    })).toEqual({ registeredName: "notion-search" });
+describe("slugify", () => {
+  it("lowercases and joins words with one dash", () => {
+    expect(slugify("My Cool Server!")).toBe("my-cool-server");
   });
 
-  it("prefixes with the server slug on collision", () => {
-    expect(resolveName({
-      serverId: "slack", upstreamName: "search", taken: new Set(["search"]),
-    })).toEqual({ registeredName: "slack_search", renamedFrom: "search" });
+  it("never returns an empty id", () => {
+    expect(slugify("!!!")).toBe("server");
+    expect(slugify("")).toBe("server");
   });
 
-  it("suffixes when even the prefixed name is taken", () => {
-    const result = resolveName({
-      serverId: "slack", upstreamName: "search",
-      taken: new Set(["search", "slack_search"]),
-    });
-    expect(result.registeredName).toBe("slack_search_2");
-  });
-
-  it("sanitises characters outside the allowed set", () => {
-    expect(resolveName({
-      serverId: "s", upstreamName: "get files/list", taken: new Set(),
-    }).registeredName).toBe("get_files_list");
-  });
-
-  it("truncates to the provider budget", () => {
-    const long = "a".repeat(80);
-    const result = resolveName({ serverId: "s", upstreamName: long, taken: new Set() });
-    expect(result.registeredName.length).toBeLessThanOrEqual(48);
-  });
-
-  it("never returns the reserved bb tool name", () => {
-    expect(resolveName({
-      serverId: "s", upstreamName: "update_environment_directory", taken: new Set(),
-    }).registeredName).not.toBe("update_environment_directory");
+  it("caps the length without leaving a trailing dash", () => {
+    const slug = slugify("a".repeat(40));
+    expect(slug.length).toBeLessThanOrEqual(24);
+    expect(slug.endsWith("-")).toBe(false);
   });
 });
 
-  it("falls back to prefixed form when upstream name sanitises to empty", () => {
-    const result = resolveName({
-      serverId: "s", upstreamName: "***", taken: new Set(),
-    });
-    expect(result.registeredName).not.toBe("");
-    expect(result.registeredName.length).toBeGreaterThan(0);
+describe("uniqueId", () => {
+  it("returns the base when free", () => {
+    expect(uniqueId("linear", new Set())).toBe("linear");
   });
 
-  it("guards against reconstructing the reserved name via prefix", () => {
-    const result = resolveName({
-      serverId: "update", upstreamName: "environment_directory",
-      taken: new Set(["environment_directory"]),
-    });
-    expect(result.registeredName).not.toBe("update_environment_directory");
+  it("counts up until it finds a free id", () => {
+    expect(uniqueId("linear", new Set(["linear", "linear-2"]))).toBe("linear-3");
+  });
+});
+
+describe("toolName", () => {
+  it("always says which server a tool came from", () => {
+    expect(toolName("linear", "create-issue", new Set())).toBe("linear_create-issue");
   });
 
-  it("truncates result after adding suffix to stay within budget", () => {
-    const long = "a".repeat(47);
-    const result = resolveName({
-      serverId: "s", upstreamName: long,
-      taken: new Set([long, `s_${long.substring(0, 46)}`]),
-    });
-    expect(result.registeredName.length).toBeLessThanOrEqual(48);
+  it("keeps two servers' same-named tools apart", () => {
+    const taken = new Set<string>();
+    const first = toolName("a", "search", taken);
+    taken.add(first);
+    const second = toolName("b", "search", taken);
+    expect(first).not.toBe(second);
   });
+
+  it("shortens a long name with a hash instead of cutting it blind", () => {
+    const long = "x".repeat(60);
+    const name = toolName("server", long, new Set());
+    expect(name.length).toBeLessThanOrEqual(MAX_TOOL_NAME);
+    const other = toolName("server", `${long}y`, new Set());
+    expect(other).not.toBe(name);
+  });
+
+  it("stays unique even when a shortened name collides", () => {
+    const taken = new Set<string>();
+    const first = toolName("server", "y".repeat(60), taken);
+    taken.add(first);
+    const second = toolName("server", `${"y".repeat(59)}z`, taken);
+    expect(second).not.toBe(first);
+    expect(second.length).toBeLessThanOrEqual(MAX_TOOL_NAME);
+  });
+
+  it("replaces characters BB does not accept", () => {
+    expect(toolName("my server", "do:thing", new Set())).toBe("my_server_do_thing");
+  });
+});

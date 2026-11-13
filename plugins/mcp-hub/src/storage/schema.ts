@@ -164,4 +164,54 @@ export const MCP_MIGRATIONS: string[] = [
   ALTER TABLE tools DROP COLUMN ask;
   ALTER TABLE tools DROP COLUMN ask_overridden;
   `,
+  // --- Rewrite (0.2.0) -------------------------------------------------------
+  // The tables above are the 0.1 layout. They are imported once by
+  // `importLegacy` and then dropped from code; nothing reads them afterwards.
+  `
+  CREATE TABLE hub_servers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    transport TEXT NOT NULL,
+    url TEXT,
+    command TEXT,
+    args TEXT NOT NULL DEFAULT '[]',
+    cwd TEXT,
+    auth TEXT NOT NULL DEFAULT 'none',
+    oauth_client_id TEXT,
+    oauth_scopes TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER
+  );
+  `,
+  `
+  CREATE TABLE hub_tools (
+    server_id TEXT NOT NULL,
+    upstream_name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    title TEXT,
+    description TEXT NOT NULL,
+    input_schema TEXT NOT NULL,
+    read_only INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    missing INTEGER NOT NULL DEFAULT 0,
+    synced_at INTEGER NOT NULL,
+    PRIMARY KEY (server_id, upstream_name)
+  );
+  `,
+  `
+  CREATE TABLE hub_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at INTEGER NOT NULL,
+    server_id TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    thread_id TEXT,
+    ok INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    error TEXT
+  );
+  `,
+  `
+  CREATE INDEX hub_calls_server_idx ON hub_calls (server_id, id);
+  `,
 ];
