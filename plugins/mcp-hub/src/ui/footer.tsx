@@ -14,30 +14,40 @@ import { useApi } from "./rpc.js";
 
 export const MCP_POPUP_ID = "servers";
 
-function enabledCount(servers: ServerView[]): number {
-  return servers.filter((server) => server.enabled).length;
+function statusOf(server: ServerView): string {
+  if (server.state === "needs-auth") return "sign in";
+  if (server.state === "failed") return "error";
+  if (server.state === "ready") return "connected";
+  if (server.state === "connecting") return "connecting";
+  return "not connected";
 }
 
 export function McpComposerAction() {
   const composer = useComposer();
   const { snapshot } = useSnapshot();
   const servers = snapshot?.servers ?? [];
-  const on = enabledCount(servers);
+  const on = servers.filter((server) => server.enabled).length;
+  // Nothing to choose yet: the button holds its place and stays disabled so it
+  // does not pop into a different size once the list arrives.
+  const ready = snapshot !== null && servers.length > 0;
 
   return (
     <Button
       type="button"
       variant="ghost"
       size="sm"
-      className="h-7 gap-1.5 rounded-md px-2 text-xs"
+      className="h-7 w-full justify-between gap-2 rounded-md px-2 text-xs"
+      disabled={!ready}
       aria-label="Choose which MCP servers are on"
       onClick={() => composer.experimental_openPopup(MCP_POPUP_ID)}
     >
-      <Icon name="ElectricPlugs" className="size-3.5" aria-hidden />
-      <span>MCP</span>
-      {servers.length > 0 ? (
-        <span className={on === 0 ? "text-muted-foreground" : ""}>{on === 0 ? "off" : on}</span>
-      ) : null}
+      <span className="flex items-center gap-1.5">
+        <Icon name="ElectricPlugs" className="size-3.5" aria-hidden />
+        <span>MCP</span>
+      </span>
+      <span className="min-w-8 text-right text-muted-foreground tabular-nums">
+        {ready ? (on === 0 ? "off" : `${on} on`) : ""}
+      </span>
     </Button>
   );
 }
@@ -53,6 +63,7 @@ export function McpComposerPopup() {
   const [failure, setFailure] = useState<string | null>(null);
 
   const servers = snapshot?.servers ?? [];
+  const on = servers.filter((server) => server.enabled).length;
   const threadId = composer.scope.kind === "new-thread" ? null : composer.scope.threadId;
 
   async function toggle(server: ServerView, enabled: boolean): Promise<void> {
@@ -85,7 +96,16 @@ export function McpComposerPopup() {
   }
 
   return (
-    <div className="flex w-[18rem] flex-col">
+    <div className="flex w-full min-w-[16rem] flex-col">
+      <div className="flex items-baseline justify-between gap-2 border-b px-3 py-2">
+        <p className="text-xs font-medium">MCP servers</p>
+        {snapshot ? (
+          <p className="text-[11px] text-muted-foreground tabular-nums">
+            {on} of {servers.length} on
+          </p>
+        ) : null}
+      </div>
+
       <div className="min-h-0 flex-1 py-1">
         {!snapshot ? <p className="px-3 py-2 text-xs text-muted-foreground">Loading…</p> : null}
         {snapshot && servers.length === 0 ? (
@@ -101,11 +121,18 @@ export function McpComposerPopup() {
               checked={server.enabled}
               disabled={busy !== null}
               onCheckedChange={(checked) => void toggle(server, checked)}
+              aria-label={`${server.name} on`}
             />
             <span className="min-w-0 flex-1 truncate text-xs">{server.name}</span>
-            {server.state === "needs-auth" ? (
-              <span className="shrink-0 text-[10px] text-amber-600">sign in</span>
-            ) : null}
+            <span
+              className={`shrink-0 text-[10px] ${
+                server.state === "needs-auth" || server.state === "failed"
+                  ? "text-amber-600"
+                  : "text-muted-foreground"
+              }`}
+            >
+              {statusOf(server)}
+            </span>
           </label>
         ))}
       </div>

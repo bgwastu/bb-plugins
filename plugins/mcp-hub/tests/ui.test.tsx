@@ -120,15 +120,30 @@ describe("the management panel", () => {
 describe("the composer footer", () => {
   const customization = () => app.composerCustomizations[0]!;
 
-  it("counts servers, not tools", async () => {
+  it("counts servers, not tools, in a full-width button", async () => {
     const rpc = rpcStubs();
     renderSlot(
       { component: customization().actions![0]!.component },
       {},
       { rpc, pluginId: "mcp-hub", composer: { scope: { kind: "thread", threadId: "thread-1" } } },
     );
-    expect(await screen.findByText("MCP")).toBeDefined();
-    expect(await screen.findByText("1")).toBeDefined();
+    const button = await screen.findByRole("button", { name: "Choose which MCP servers are on" });
+    expect(button.className).toContain("w-full");
+    expect(await screen.findByText("1 on")).toBeDefined();
+  });
+
+  it("holds a disabled button until the list arrives", async () => {
+    // A snapshot that never resolves: the button must still be there, and it
+    // must not be clickable.
+    const rpc = { ...rpcStubs(), snapshot: vi.fn(() => new Promise<never>(() => undefined)) };
+    renderSlot(
+      { component: customization().actions![0]!.component },
+      {},
+      { rpc, pluginId: "mcp-hub", composer: { scope: { kind: "thread", threadId: "thread-1" } } },
+    );
+    const button = await screen.findByRole("button", { name: "Choose which MCP servers are on" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("MCP")).toBeDefined();
   });
 
   it("says off when every server is off", async () => {
@@ -138,7 +153,6 @@ describe("the composer footer", () => {
       {},
       { rpc, pluginId: "mcp-hub", composer: { scope: { kind: "thread", threadId: "thread-1" } } },
     );
-    expect(await screen.findByText("MCP")).toBeDefined();
     expect(await screen.findByText("off")).toBeDefined();
   });
 
@@ -161,6 +175,7 @@ describe("the composer footer", () => {
       expect(rpc.restart_thread).toHaveBeenCalledWith({ threadId: "thread-1", interrupt: false }),
     );
     expect(screen.getByText("Manage servers")).toBeDefined();
+    expect(screen.getByText("1 of 1 on")).toBeDefined();
     expect(screen.queryByText(/All settings/)).toBeNull();
     expect(screen.queryByText(/For this conversation/)).toBeNull();
   });
