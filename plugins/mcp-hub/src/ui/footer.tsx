@@ -43,10 +43,9 @@ export function McpComposerAction() {
     >
       <span className="flex items-center gap-1.5">
         <Icon name="ElectricPlugs" className="size-3.5" aria-hidden />
-        <span>MCP</span>
       </span>
       <span className="min-w-8 text-right text-muted-foreground tabular-nums">
-        {ready ? (on === 0 ? "off" : `${on} on`) : ""}
+        {ready ? (on === 0 ? "off" : on) : ""}
       </span>
     </Button>
   );
