@@ -532,6 +532,20 @@ export function createHub(bb: BbPluginApi, deps: HubDeps): Hub {
         await projects.set(projectId, merged(projectOverrides(projectId)));
       }
 
+      // The counts come from the overrides that were just written, not from a
+      // re-read: the caller is waiting on this call, and a second round trip
+      // can only disagree with what it already knows.
+      const scopeProject = input.projectId ?? (input.threadId ? await projectIdFor(input.threadId) : undefined);
+      const effective =
+        input.threadId !== undefined
+          ? mergeOverrides(projectOverrides(scopeProject ?? ""), readOverrides(await threadMetadata(input.threadId)))
+          : projectOverrides(scopeProject ?? "");
+      const resolved = resolveSelection(
+        store,
+        { servers: effective.servers, tools: effective.tools },
+        deps.registered(),
+      );
+
       const apply = input.apply && input.threadId !== undefined;
       let restarted = false;
       let deferred = false;
@@ -541,10 +555,8 @@ export function createHub(bb: BbPluginApi, deps: HubDeps): Hub {
         deferred = result.deferred;
       }
 
-      const scopeProject = input.projectId ?? (input.threadId ? await projectIdFor(input.threadId) : undefined);
-      const refreshed = await selectionView(input.threadId, scopeProject);
       deps.publish();
-      return { restarted, deferred, truncated: refreshed.truncated, offered: refreshed.offered };
+      return { restarted, deferred, truncated: resolved.truncated, offered: resolved.offered };
     },
 
     overridesFor,
