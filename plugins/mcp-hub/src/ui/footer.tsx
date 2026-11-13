@@ -36,17 +36,19 @@ export function McpComposerAction() {
       type="button"
       variant="ghost"
       size="sm"
-      className="h-7 w-full justify-between gap-2 rounded-md px-2 text-xs"
+      className="h-7 w-full justify-start gap-1.5 rounded-md px-2 text-xs"
       disabled={!ready}
-      aria-label="Choose which MCP servers are on"
+      aria-label={`MCP servers: ${on} on. Choose which servers are on`}
       onClick={() => composer.experimental_openPopup(MCP_POPUP_ID)}
     >
-      <span className="flex items-center gap-1.5">
-        <Icon name="ElectricPlugs" className="size-3.5" aria-hidden />
-      </span>
-      <span className="min-w-8 text-right text-muted-foreground tabular-nums">
-        {ready ? (on === 0 ? "off" : on) : ""}
-      </span>
+      <Icon
+        name="ElectricPlugs"
+        className={`size-3.5 ${on === 0 ? "text-muted-foreground" : ""}`}
+        aria-hidden
+      />
+      {ready && on > 0 ? (
+        <span className="tabular-nums text-muted-foreground">{on}</span>
+      ) : null}
     </Button>
   );
 }
